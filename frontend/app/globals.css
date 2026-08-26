@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html, body {
+  background-color: #f7f3ea;
+  color: #152625;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: #2f6b58;
+  color: #fdfcf9;
+}
+
+:focus-visible {
+  outline: 2px solid #2f6b58;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.timer-ring {
+  transition: stroke-dashoffset 1s linear;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white;
+  }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  /* The dashboard shell is a fixed-height, internally-scrolling app layout
+     (so the sidebar stays put while you scroll a long page on screen) — but
+     that same fixed height is exactly what was telling the browser "this is
+     the whole page" when printing, cutting the report off after whatever
+     fit on one screen. Release all of that for print so the full content
+     lays out normally and paginates across as many pages as it needs. */
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .print-shell-root {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .print-shell-col {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .print-shell-main {
+    height: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  /* Professional, letterhead-style report printing — deliberately distinct
+     from the on-screen dashboard look (no colored cards/shadows/pills). */
+  #report-content {
+    font-family: Georgia, 'Times New Roman', serif;
+  }
+  #report-content,
+  #report-content * {
+    color: #1a1a1a !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border-color: #d0d0d0 !important;
+  }
+  .print-header {
+    display: block !important;
+  }
+  #report-content table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+  }
+  #report-content th {
+    background-color: #f3f1ea !important;
+    font-weight: 600;
+    border-bottom: 1px solid #999 !important;
+    text-align: left;
+  }
+  #report-content th,
+  #report-content td {
+    border-bottom: 1px solid #e2e2e2 !important;
+    font-size: 10.5px;
+    padding: 5px 6px !important;
+    white-space: normal !important;
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+  #report-content tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  #report-content .rounded-xl2,
+  #report-content .rounded-lg {
+    border-radius: 2px !important;
+  }
+  #report-content .rounded-full {
+    border-radius: 2px !important;
+    padding: 1px 6px !important;
+    border: 1px solid #999 !important;
+  }
+  #report-content .print-bar {
+    fill: #3f3f3f !important;
+  }
+  #report-content .overflow-x-auto {
+    overflow: visible !important;
+  }
+}
+
+.print-header {
+  display: none;
+}
