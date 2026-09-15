@@ -89,3 +89,12 @@ export function HistoryIcon(p: IconProps) {
     </svg>
   );
 }
+export function PaymentIcon(p: IconProps) {
+  return (
+    <svg {...base} {...p}>
+      <rect x="2.5" y="5.5" width="19" height="13" rx="2" />
+      <path d="M2.5 9.5h19" strokeLinecap="round" />
+      <path d="M6 14.5h4" strokeLinecap="round" />
+    </svg>
+  );
+}

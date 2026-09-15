@@ -1,7 +1,7 @@
 'use client';
 
-import ReportView from '@/components/ReportView';
+import ExecutiveReportView from '@/components/ExecutiveReportView';
 
 export default function AdminReportsPage() {
-  return <ReportView allowBranchFilter />;
+  return <ExecutiveReportView allowBranchFilter />;
 }

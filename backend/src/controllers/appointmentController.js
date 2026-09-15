@@ -135,7 +135,7 @@ async function cancelAppointment(req, res) {
 // .createBooking), then links the resulting booking back to the appointment.
 async function checkInAppointment(req, res) {
   const { id } = req.params;
-  const { roomId, amountPaid, paymentMethod } = req.body;
+  const { roomId, providerId, amountPaid, paymentMethod } = req.body;
   if (!roomId) {
     return res.status(400).json({ error: 'Choose a free room to check the customer into.' });
   }
@@ -173,9 +173,31 @@ async function checkInAppointment(req, res) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'This room is currently occupied. Choose a free room.' });
     }
-    if (!room.provider_id) {
+
+    const chosenProviderId = providerId || room.provider_id;
+    if (!chosenProviderId) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'This room has no service provider assigned yet.' });
+      return res.status(400).json({ error: 'Choose a service provider for this booking.' });
+    }
+    const providerRes = await client.query(
+      `SELECT u.*, EXISTS (
+         SELECT 1 FROM bookings bk WHERE bk.provider_id = u.id AND bk.status IN ('pending', 'active')
+       ) AS is_busy
+       FROM users u WHERE u.id = $1 AND u.role = 'provider' AND u.is_active = TRUE`,
+      [chosenProviderId]
+    );
+    const provider = providerRes.rows[0];
+    if (!provider) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'That provider was not found or is not active.' });
+    }
+    if (String(provider.branch_id) !== String(room.branch_id)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Choose a provider from the same branch as this room.' });
+    }
+    if (provider.is_busy) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: `${provider.name} is currently with another customer. Choose someone else who's free.` });
     }
 
     const serviceRes = await client.query('SELECT * FROM services WHERE id = $1', [appt.service_id]);
@@ -193,7 +215,7 @@ async function checkInAppointment(req, res) {
          (customer_name, customer_phone, service_id, room_id, provider_id, receptionist_id, branch_id,
           amount_due, amount_paid, payment_status, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'paid', 'pending') RETURNING *`,
-      [appt.customer_name, appt.customer_phone, service.id, room.id, room.provider_id, req.user.id, room.branch_id, service.price, paidNum]
+      [appt.customer_name, appt.customer_phone, service.id, room.id, provider.id, req.user.id, room.branch_id, service.price, paidNum]
     );
 
     await client.query(

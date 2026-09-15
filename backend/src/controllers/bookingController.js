@@ -12,7 +12,7 @@ async function refreshedRoom(roomId) {
 // this endpoint records the payment and creates the booking atomically, so
 // there's no window where a room is held for someone who hasn't paid yet.
 async function createBooking(req, res) {
-  const { customerName, customerPhone, serviceId, roomId, amountPaid, paymentMethod } = req.body;
+  const { customerName, customerPhone, serviceId, roomId, providerId, amountPaid, paymentMethod } = req.body;
   if (!customerName || !customerPhone || !serviceId || !roomId) {
     return res.status(400).json({ error: 'Customer name, phone, service, and room are all required.' });
   }
@@ -44,9 +44,34 @@ async function createBooking(req, res) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'This branch is currently on maintenance and cannot accept new bookings.' });
     }
-    if (!room.provider_id) {
+
+    // The provider doesn't have to be the room's usual one — any free
+    // provider at this branch can be chosen, so one person isn't stuck
+    // tied to a single room. Falls back to the room's default if none given.
+    const chosenProviderId = providerId || room.provider_id;
+    if (!chosenProviderId) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'This room has no service provider assigned yet.' });
+      return res.status(400).json({ error: 'Choose a service provider for this booking.' });
+    }
+    const providerRes = await client.query(
+      `SELECT u.*, EXISTS (
+         SELECT 1 FROM bookings bk WHERE bk.provider_id = u.id AND bk.status IN ('pending', 'active')
+       ) AS is_busy
+       FROM users u WHERE u.id = $1 AND u.role = 'provider' AND u.is_active = TRUE`,
+      [chosenProviderId]
+    );
+    const provider = providerRes.rows[0];
+    if (!provider) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'That provider was not found or is not active.' });
+    }
+    if (String(provider.branch_id) !== String(room.branch_id)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Choose a provider from the same branch as this room.' });
+    }
+    if (provider.is_busy) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: `${provider.name} is currently with another customer. Choose someone else who's free.` });
     }
 
     const serviceRes = await client.query('SELECT * FROM services WHERE id = $1 AND is_active = TRUE', [serviceId]);
@@ -68,7 +93,7 @@ async function createBooking(req, res) {
          (customer_name, customer_phone, service_id, room_id, provider_id, receptionist_id, branch_id,
           amount_due, amount_paid, payment_status, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'paid', 'pending') RETURNING *`,
-      [customerName.trim(), customerPhone.trim(), service.id, room.id, room.provider_id, req.user.id, room.branch_id, service.price, paidNum]
+      [customerName.trim(), customerPhone.trim(), service.id, room.id, provider.id, req.user.id, room.branch_id, service.price, paidNum]
     );
 
     await client.query(
@@ -115,7 +140,7 @@ async function confirmStart(req, res) {
     const expectedEnd = new Date(now.getTime() + booking.duration_minutes * 60000);
 
     await db.query(
-      `UPDATE bookings SET status = 'active', active_started_at = $1, expected_end_at = $2 WHERE id = $3`,
+      `UPDATE bookings SET status = 'active', active_started_at = $1, expected_end_at = $2, no_show_reported_at = NULL WHERE id = $3`,
       [now, expectedEnd, id]
     );
     await db.query(`UPDATE rooms SET status = 'active' WHERE id = $1`, [booking.room_id]);
@@ -572,8 +597,50 @@ async function forceEndBooking(req, res) {
   }
 }
 
-// --- Receptionist/admin: customer hasn't shown up yet — hold their (already
-// paid) spot and free the room for someone else in the meantime ---
+// --- Provider: the customer hasn't shown up. This does NOT cancel or free
+// the room — a provider unilaterally ending someone else's booking isn't
+// their call. It just alerts the front desk, who decide what happens next
+// (put it on hold, chase the customer, or cancel it themselves). Only
+// available once the confirmation window has actually run out (the same
+// moment the automatic "pending timeout" alert already fires). ---
+async function reportNoShow(req, res) {
+  const { id } = req.params;
+  try {
+    const bookingRes = await db.query('SELECT * FROM bookings WHERE id = $1', [id]);
+    const booking = bookingRes.rows[0];
+    if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+    if (booking.provider_id !== req.user.id) {
+      return res.status(403).json({ error: 'This booking is not assigned to you.' });
+    }
+    if (booking.status !== 'pending') {
+      return res.status(409).json({ error: 'This booking is not currently awaiting confirmation.' });
+    }
+    if (!booking.pending_notified) {
+      return res.status(409).json({ error: 'The confirmation window hasn\u2019t run out yet.' });
+    }
+
+    await db.query(`UPDATE bookings SET no_show_reported_at = NOW() WHERE id = $1`, [id]);
+
+    const updatedRoom = await refreshedRoom(booking.room_id);
+    broadcastRoomUpdate(updatedRoom);
+
+    await notify({
+      type: 'provider_reported_no_show',
+      message: `${req.user.name} says ${booking.customer_name} hasn't shown up yet. The room is still held for them — please follow up.`,
+      bookingId: booking.id,
+      roomId: booking.room_id,
+      branchId: booking.branch_id,
+      targetRole: 'receptionist',
+    });
+
+    return res.json({ room: updatedRoom });
+  } catch (err) {
+    console.error('Report no-show error:', err);
+    return res.status(500).json({ error: 'Could not notify the front desk.' });
+  }
+}
+
+
 async function holdBooking(req, res) {
   const { id } = req.params;
   try {
@@ -611,7 +678,7 @@ async function holdBooking(req, res) {
 // provider to confirm the start, without asking them to pay again ---
 async function resumeBooking(req, res) {
   const { id } = req.params;
-  const { roomId } = req.body;
+  const { roomId, providerId } = req.body;
   if (!roomId) return res.status(400).json({ error: 'Choose a free room to resume this booking into.' });
 
   const client = await db.pool.connect();
@@ -648,9 +715,33 @@ async function resumeBooking(req, res) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'This branch is currently on maintenance and cannot accept new bookings.' });
     }
-    if (!room.provider_id) {
+
+    // Same flexibility as a fresh booking — any free provider at this
+    // branch can pick this back up, not just the room's usual one.
+    const chosenProviderId = providerId || room.provider_id;
+    if (!chosenProviderId) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'This room has no service provider assigned yet.' });
+      return res.status(400).json({ error: 'Choose a service provider to resume this booking.' });
+    }
+    const providerRes = await client.query(
+      `SELECT u.*, EXISTS (
+         SELECT 1 FROM bookings bk WHERE bk.provider_id = u.id AND bk.status IN ('pending', 'active') AND bk.id != $2
+       ) AS is_busy
+       FROM users u WHERE u.id = $1 AND u.role = 'provider' AND u.is_active = TRUE`,
+      [chosenProviderId, id]
+    );
+    const provider = providerRes.rows[0];
+    if (!provider) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'That provider was not found or is not active.' });
+    }
+    if (String(provider.branch_id) !== String(room.branch_id)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Choose a provider from the same branch as this room.' });
+    }
+    if (provider.is_busy) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: `${provider.name} is currently with another customer. Choose someone else who's free.` });
     }
 
     await client.query(
@@ -658,7 +749,7 @@ async function resumeBooking(req, res) {
          room_id = $1, provider_id = $2, status = 'pending',
          pending_started_at = NOW(), pending_notified = FALSE, on_hold_at = NULL
        WHERE id = $3`,
-      [room.id, room.provider_id, id]
+      [room.id, provider.id, id]
     );
     await client.query(`UPDATE rooms SET status = 'pending' WHERE id = $1`, [room.id]);
 
@@ -723,4 +814,5 @@ module.exports = {
   holdBooking,
   resumeBooking,
   releaseBooking,
+  reportNoShow,
 };

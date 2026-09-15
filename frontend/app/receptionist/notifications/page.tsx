@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useNotifications } from '@/lib/useNotifications';
-import BranchFilter from '@/components/BranchFilter';
 
 function timeAgo(iso: string): string {
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -19,6 +18,7 @@ const TYPE_LABEL: Record<string, string> = {
   service_overtime: 'Session running over time',
   extra_service_request: 'Extra service added',
   payment_recorded: 'Payment recorded',
+  service_ended_payment_due: 'Service ended — payment follow-up',
   booking_cancelled: 'Booking cancelled',
   admin_force_ended: 'Session closed by admin',
   service_ending_soon: 'Session ending soon',
@@ -29,41 +29,59 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 const RECENT_DAYS = 20;
+const ALL_TYPES = 'all';
 
-export default function AdminNotificationsPage() {
-  const [branchId, setBranchId] = useState('');
+export default function ReceptionistNotificationsPage() {
   const [showAllHistory, setShowAllHistory] = useState(false);
-  const { notifications, unreadCount, markAllRead, markRead, loading } = useNotifications(branchId);
+  const [typeFilter, setTypeFilter] = useState(ALL_TYPES);
+  const { notifications, unreadCount, markAllRead, markRead, loading } = useNotifications();
 
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - RECENT_DAYS);
-  const displayedNotifications = showAllHistory
-    ? notifications
-    : notifications.filter((n) => new Date(n.created_at) >= cutoff);
+  const displayedNotifications = notifications
+    .filter((n) => showAllHistory || new Date(n.created_at) >= cutoff)
+    .filter((n) => typeFilter === ALL_TYPES || n.type === typeFilter);
+
+  const availableTypes = Array.from(new Set(notifications.map((n) => n.type)));
 
   return (
     <div>
       <div className="flex items-center justify-between flex-wrap gap-3 mb-1">
         <h1 className="font-display text-3xl">Notifications</h1>
-        <div className="flex items-center gap-3">
-          <BranchFilter value={branchId} onChange={setBranchId} />
-          {unreadCount > 0 && (
-            <button
-              onClick={() => markAllRead()}
-              className="text-sm text-forest-600 hover:text-forest-800 font-medium"
-            >
-              Mark all as read
-            </button>
-          )}
-        </div>
+        {unreadCount > 0 && (
+          <button
+            onClick={() => markAllRead()}
+            className="text-sm text-forest-600 hover:text-forest-800 font-medium"
+          >
+            Mark all as read
+          </button>
+        )}
       </div>
       <p className="text-forest-500/70 text-sm mb-3">
-        Every alert raised across reception and treatment rooms, at every branch — including overdue confirmations and payments.
+        Alerts raised at your branch — including customers who haven&apos;t shown up, overdue confirmations, and payments.
       </p>
-      <label className="flex items-center gap-2 text-sm text-forest-600 mb-6">
-        <input type="checkbox" checked={showAllHistory} onChange={(e) => setShowAllHistory(e.target.checked)} />
-        Show notifications older than {RECENT_DAYS} days
-      </label>
+
+      <div className="flex items-center flex-wrap gap-4 mb-6">
+        <label className="flex items-center gap-2 text-sm text-forest-600">
+          <input type="checkbox" checked={showAllHistory} onChange={(e) => setShowAllHistory(e.target.checked)} />
+          Show notifications older than {RECENT_DAYS} days
+        </label>
+
+        {availableTypes.length > 0 && (
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="text-sm border border-forest-200 rounded-lg px-2.5 py-1.5 bg-white"
+          >
+            <option value={ALL_TYPES}>All types</option>
+            {availableTypes.map((t) => (
+              <option key={t} value={t}>
+                {TYPE_LABEL[t] || t}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
 
       {loading ? (
         <p className="text-forest-500/70">Loading…</p>

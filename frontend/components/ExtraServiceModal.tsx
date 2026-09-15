@@ -38,8 +38,8 @@ export default function ExtraServiceModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-40 p-4">
-      <div className="bg-white rounded-xl2 shadow-card w-full max-w-sm p-6">
+    <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-40 p-4 animate-modalBackdropIn">
+      <div className="bg-white rounded-xl2 shadow-card w-full max-w-sm p-6 animate-modalContentIn">
         <h2 className="font-display text-2xl mb-1">Add extra service</h2>
         <p className="text-sm text-forest-500/70 mb-5">
           {sessionAlreadyEnded

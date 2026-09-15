@@ -1,5 +1,6 @@
 const db = require('../config/db');
-const { notify } = require('../utils/notify');
+const { notify, broadcastRoomUpdate } = require('../utils/notify');
+const { shapeRoom, ROOM_SELECT } = require('../controllers/roomController');
 
 const PENDING_TIMEOUT_MINUTES = Number(process.env.PENDING_TIMEOUT_MINUTES || 30);
 const ENDING_SOON_LEAD_MINUTES = Number(process.env.ENDING_SOON_LEAD_MINUTES || 10);
@@ -27,6 +28,9 @@ async function checkPendingTimeouts() {
       targetRole: 'receptionist',
     });
     await db.query('UPDATE bookings SET pending_notified = TRUE WHERE id = $1', [booking.id]);
+
+    const full = await db.query(`${ROOM_SELECT} WHERE r.id = $1`, [booking.room_id]);
+    if (full.rows[0]) broadcastRoomUpdate(shapeRoom(full.rows[0]));
   }
 }
 

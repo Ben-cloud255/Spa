@@ -12,6 +12,7 @@ const {
   holdBooking,
   resumeBooking,
   releaseBooking,
+  reportNoShow,
 } = require('../controllers/bookingController');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
@@ -29,5 +30,6 @@ router.post('/:id/force-end', requireAuth, requireRole('admin'), forceEndBooking
 router.post('/:id/hold', requireAuth, requireRole('admin', 'receptionist'), holdBooking);
 router.post('/:id/resume', requireAuth, requireRole('admin', 'receptionist'), resumeBooking);
 router.post('/:id/release', requireAuth, requireRole('admin', 'receptionist'), releaseBooking);
+router.post('/:id/report-no-show', requireAuth, requireRole('provider'), reportNoShow);
 
 module.exports = router;

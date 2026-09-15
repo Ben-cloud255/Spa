@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, FormEvent } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { useBranches } from '@/lib/useBranches';
 import StatusBadge from '@/components/StatusBadge';
@@ -9,16 +10,33 @@ import type { Room, User } from '@/lib/types';
 
 export default function AdminRoomsPage() {
   const { branches } = useBranches();
+  const searchParams = useSearchParams();
+  const focusId = searchParams.get('focus');
   const [rooms, setRooms] = useState<Room[]>([]);
   const [providers, setProviders] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterBranch, setFilterBranch] = useState('');
+  const [filterProvider, setFilterProvider] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [showArchived, setShowArchived] = useState(false);
   const [newName, setNewName] = useState('');
   const [newProvider, setNewProvider] = useState('');
   const [newBranch, setNewBranch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [highlightId, setHighlightId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!focusId) return;
+    setShowArchived(true);
+    setFilterBranch('');
+    setFilterProvider('');
+    setFilterStatus('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId]);
 
   async function load() {
     setLoading(true);
@@ -45,6 +63,41 @@ export default function AdminRoomsPage() {
   }, [branches, newBranch]);
 
   const providersForNewBranch = providers.filter((p) => !newBranch || String(p.branch_id) === newBranch);
+
+  const displayedRooms = rooms
+    .filter((r) => !filterProvider || String(r.provider?.id || '') === filterProvider)
+    .filter((r) => !filterStatus || r.status === filterStatus)
+    .sort((a, b) => (sortDir === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
+
+  // Selection is cleared whenever the visible list changes shape, so a stale
+  // checkbox never points at a room that's no longer on screen.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [filterBranch, filterProvider, filterStatus, showArchived]);
+
+  useEffect(() => {
+    if (!focusId || loading) return;
+    const id = Number(focusId);
+    setHighlightId(id);
+    const el = document.getElementById(`room-row-${id}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = setTimeout(() => setHighlightId(null), 2500);
+    return () => clearTimeout(timer);
+  }, [focusId, loading, rooms]);
+
+  function toggleSelect(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    const selectable = displayedRooms.filter((r) => !r.isArchived);
+    setSelectedIds((prev) => (prev.size === selectable.length ? new Set() : new Set(selectable.map((r) => r.id))));
+  }
 
   async function createRoom(e: FormEvent) {
     e.preventDefault();
@@ -122,6 +175,56 @@ export default function AdminRoomsPage() {
     }
   }
 
+  async function bulkUnassign() {
+    const targets = displayedRooms.filter((r) => selectedIds.has(r.id) && !r.isArchived && r.provider);
+    if (targets.length === 0) return;
+    if (!window.confirm(`Unassign the provider from ${targets.length} room${targets.length === 1 ? '' : 's'}? Rooms currently mid-session keep serving their current booking either way — this only clears the room's default provider.`)) {
+      return;
+    }
+    setBulkBusy(true);
+    setError(null);
+    const results = await Promise.allSettled(
+      targets.map((r) => api.patch(`/rooms/${r.id}`, { provider_id: null }))
+    );
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    if (failed > 0) setError(`Unassigned ${targets.length - failed} of ${targets.length} rooms — ${failed} failed.`);
+    setSelectedIds(new Set());
+    setBulkBusy(false);
+    load();
+  }
+
+  async function bulkRemove() {
+    const targets = displayedRooms.filter((r) => selectedIds.has(r.id) && !r.isArchived);
+    if (targets.length === 0) return;
+    const busyCount = targets.filter((r) => r.status !== 'inactive').length;
+    if (
+      !window.confirm(
+        `Remove ${targets.length} room${targets.length === 1 ? '' : 's'}? They'll disappear from booking and staff views, but booking history is kept and you can restore them later.` +
+          (busyCount > 0 ? ` Note: ${busyCount} of them currently have a session and will be skipped until freed.` : '')
+      )
+    ) {
+      return;
+    }
+    setBulkBusy(true);
+    setError(null);
+    const eligible = targets.filter((r) => r.status === 'inactive');
+    const results = await Promise.allSettled(eligible.map((r) => api.del(`/rooms/${r.id}`)));
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    const skipped = targets.length - eligible.length;
+    if (failed > 0 || skipped > 0) {
+      setError(
+        `Removed ${eligible.length - failed} room${eligible.length - failed === 1 ? '' : 's'}.` +
+          (skipped > 0 ? ` ${skipped} skipped (still in session).` : '') +
+          (failed > 0 ? ` ${failed} failed.` : '')
+      );
+    }
+    setSelectedIds(new Set());
+    setBulkBusy(false);
+    load();
+  }
+
+  const selectableCount = displayedRooms.filter((r) => !r.isArchived).length;
+
   return (
     <div>
       <div className="flex items-start justify-between flex-wrap gap-3 mb-1">
@@ -179,13 +282,69 @@ export default function AdminRoomsPage() {
         </button>
       </form>
 
-      <div className="flex items-center justify-between mb-3">
-        <label className="flex items-center gap-2 text-sm text-forest-600">
+      <div className="flex flex-wrap items-center gap-3 mb-3">
+        <select
+          value={filterProvider}
+          onChange={(e) => setFilterProvider(e.target.value)}
+          className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
+        >
+          <option value="">All providers</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value)}
+          className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
+        >
+          <option value="">All statuses</option>
+          <option value="inactive">Free</option>
+          <option value="pending">Awaiting confirmation</option>
+          <option value="active">In session</option>
+        </select>
+        <button
+          onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+          className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white hover:bg-forest-50"
+        >
+          Name {sortDir === 'asc' ? 'A → Z' : 'Z → A'}
+        </button>
+        <label className="flex items-center gap-2 text-sm text-forest-600 ml-auto">
           <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
           Show removed rooms
         </label>
-        {error && <p className="text-sm text-clay">{error}</p>}
+        {error && <p className="text-sm text-clay basis-full">{error}</p>}
       </div>
+
+      {selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center gap-3 mb-3 bg-forest-50 border border-forest-200 rounded-lg px-4 py-2.5">
+          <p className="text-sm font-medium text-forest-700">
+            {selectedIds.size} room{selectedIds.size === 1 ? '' : 's'} selected
+          </p>
+          <button
+            onClick={bulkUnassign}
+            disabled={bulkBusy}
+            className="rounded-lg border border-forest-300 bg-white text-forest-700 px-3 py-1.5 text-xs font-medium hover:bg-forest-50 disabled:opacity-50"
+          >
+            Unassign provider
+          </button>
+          <button
+            onClick={bulkRemove}
+            disabled={bulkBusy}
+            className="rounded-lg border border-clay/40 bg-white text-clay px-3 py-1.5 text-xs font-medium hover:bg-clay/5 disabled:opacity-50"
+          >
+            Remove rooms
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-xs font-medium text-forest-500 hover:text-forest-700 ml-auto"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <p className="text-forest-500/70">Loading…</p>
@@ -195,6 +354,14 @@ export default function AdminRoomsPage() {
           <table className="w-full text-sm">
             <thead className="bg-sand-100/70 text-forest-600 text-xs uppercase tracking-wide">
               <tr>
+                <th className="px-4 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={selectableCount > 0 && selectedIds.size === selectableCount}
+                    onChange={toggleSelectAll}
+                    aria-label="Select all rooms"
+                  />
+                </th>
                 <th className="text-left px-4 py-3">Room</th>
                 <th className="text-left px-4 py-3">Branch</th>
                 <th className="text-left px-4 py-3">Status</th>
@@ -203,8 +370,17 @@ export default function AdminRoomsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-forest-50">
-              {rooms.map((room) => (
-                <tr key={room.id} className={room.isArchived ? 'opacity-50' : ''}>
+              {displayedRooms.map((room) => (
+                <tr key={room.id} id={`room-row-${room.id}`} className={`transition-colors ${room.isArchived ? 'opacity-50' : ''} ${highlightId === room.id ? 'bg-honey-500/20' : ''}`}>
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(room.id)}
+                      disabled={room.isArchived}
+                      onChange={() => toggleSelect(room.id)}
+                      aria-label={`Select ${room.name}`}
+                    />
+                  </td>
                   <td className="px-4 py-3 font-medium">
                     {room.name}
                     {room.isArchived && <span className="ml-2 text-xs text-clay font-normal">Removed</span>}
@@ -233,6 +409,12 @@ export default function AdminRoomsPage() {
                           </option>
                         ))}
                     </select>
+                    {room.currentBooking?.provider &&
+                      (!room.provider || room.currentBooking.provider.id !== room.provider.id) && (
+                        <p className="text-xs text-forest-600 font-medium mt-1">
+                          Currently: {room.currentBooking.provider.name}
+                        </p>
+                      )}
                   </td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
                     {room.isArchived ? (
@@ -264,10 +446,10 @@ export default function AdminRoomsPage() {
                   </td>
                 </tr>
               ))}
-              {rooms.length === 0 && (
+              {displayedRooms.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-forest-500/60">
-                    No rooms found.
+                  <td colSpan={6} className="px-4 py-8 text-center text-forest-500/60">
+                    No rooms match this filter.
                   </td>
                 </tr>
               )}

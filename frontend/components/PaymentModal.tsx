@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { usePaymentMethods } from '@/lib/usePaymentMethods';
 import type { Room } from '@/lib/types';
 
 export default function PaymentModal({
@@ -18,6 +19,11 @@ export default function PaymentModal({
   const requiresFullPayment = booking.status === 'awaiting_payment';
   const [amount, setAmount] = useState<string>(outstanding > 0 ? String(outstanding) : '');
   const [method, setMethod] = useState('cash');
+  const { paymentMethods } = usePaymentMethods();
+
+  useEffect(() => {
+    if (paymentMethods.length > 0) setMethod(paymentMethods[0].name);
+  }, [paymentMethods]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -37,8 +43,8 @@ export default function PaymentModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-40 p-4">
-      <div className="bg-white rounded-xl2 shadow-card w-full max-w-sm p-6">
+    <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-40 p-4 animate-modalBackdropIn">
+      <div className="bg-white rounded-xl2 shadow-card w-full max-w-sm p-6 animate-modalContentIn">
         <h2 className="font-display text-2xl mb-1">Additional payment</h2>
         <p className="text-sm text-forest-500/70 mb-5">
           {requiresFullPayment
@@ -72,9 +78,11 @@ export default function PaymentModal({
               onChange={(e) => setMethod(e.target.value)}
               className="w-full rounded-lg border border-forest-200 px-3.5 py-2.5 text-sm focus:border-forest-500 focus:ring-1 focus:ring-forest-500 outline-none"
             >
-              <option value="cash">Cash</option>
-              <option value="mobile_money">Mobile money</option>
-              <option value="card">Card</option>
+              {paymentMethods.map((pm) => (
+                <option key={pm.id} value={pm.name}>
+                  {pm.name}
+                </option>
+              ))}
             </select>
           </div>
 

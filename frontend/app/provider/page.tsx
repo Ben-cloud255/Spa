@@ -48,7 +48,9 @@ export default function ProviderDashboard() {
     return () => window.clearInterval(timer);
   }, [user?.id]);
 
-  const myRooms = rooms.filter((r) => r.provider?.id === user?.id);
+  const myRooms = rooms.filter(
+    (r) => r.provider?.id === user?.id || r.currentBooking?.provider?.id === user?.id
+  );
 
   async function confirmStart(bookingId: number) {
     setBusyId(bookingId);
@@ -78,14 +80,14 @@ export default function ProviderDashboard() {
     }
   }
 
-  async function cancelNoShow(bookingId: number) {
+  async function reportNoShow(bookingId: number) {
     setBusyId(bookingId);
     setError(null);
     try {
-      await api.post(`/bookings/${bookingId}/cancel`, { reason: 'Customer did not show up' });
+      await api.post(`/bookings/${bookingId}/report-no-show`);
       refresh();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not cancel the booking.');
+      setError(err instanceof ApiError ? err.message : 'Could not notify the front desk.');
     } finally {
       setBusyId(null);
     }
@@ -105,7 +107,7 @@ export default function ProviderDashboard() {
                   <p className="text-xs text-forest-500/70">{b.service_name} · {b.room_name}</p>
                   <p className="text-xs text-forest-500/60 mt-1">Ended {new Date(b.ended_at || b.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
                 </div>
-                <button onClick={() => { const r = rooms.find((room) => room.id === b.room_id); if (r) setExtraServiceRoom({ ...r, currentBooking: { id: b.id, customerName: b.customer_name, customerPhone: b.customer_phone, status: b.status, pendingStartedAt: b.pending_started_at, activeStartedAt: b.active_started_at, expectedEndAt: b.expected_end_at, extendedMinutes: b.extended_minutes, paymentStatus: b.payment_status, amountDue: b.amount_due, amountPaid: b.amount_paid, service: { id: b.service_id, name: b.service_name, durationMinutes: b.duration_minutes }, pendingAddon: null } }); }} className="shrink-0 rounded-lg border border-forest-300 text-forest-700 px-3 py-2 text-xs font-medium">Request extra service</button>
+                <button onClick={() => { const r = rooms.find((room) => room.id === b.room_id); if (r) setExtraServiceRoom({ ...r, currentBooking: { id: b.id, customerName: b.customer_name, customerPhone: b.customer_phone, status: b.status, pendingStartedAt: b.pending_started_at, activeStartedAt: b.active_started_at, expectedEndAt: b.expected_end_at, extendedMinutes: b.extended_minutes, paymentStatus: b.payment_status, amountDue: b.amount_due, amountPaid: b.amount_paid, provider: user ? { id: user.id, name: user.name } : null, service: { id: b.service_id, name: b.service_name, durationMinutes: b.duration_minutes }, pendingAddon: null } }); }} className="shrink-0 rounded-lg border border-forest-300 text-forest-700 px-3 py-2 text-xs font-medium">Request extra service</button>
               </div>
             ))}
           </div>
@@ -124,10 +126,11 @@ export default function ProviderDashboard() {
         <p className="text-forest-500/70">You are not currently assigned to any room. Ask your admin to assign you one.</p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {myRooms.map((room) => {
+          {myRooms.map((room, i) => {
             const booking = room.currentBooking;
             return (
-              <RoomCard key={room.id} room={room} enableAlertSound>
+              <div key={room.id} className="animate-fadeInUp" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
+              <RoomCard room={room} enableAlertSound>
                 {booking?.status === 'pending' && (
                   <div className="flex gap-2">
                     <button
@@ -137,13 +140,16 @@ export default function ProviderDashboard() {
                     >
                       {busyId === booking.id ? 'Confirming…' : 'Confirm client has entered'}
                     </button>
-                    <button
-                      onClick={() => cancelNoShow(booking.id)}
-                      disabled={busyId === booking.id}
-                      className="rounded-lg border border-forest-200 px-3 py-2 text-xs font-medium hover:bg-forest-50"
-                    >
-                      No-show
-                    </button>
+                    {booking.pendingNotified && (
+                      <button
+                        onClick={() => reportNoShow(booking.id)}
+                        disabled={busyId === booking.id}
+                        className="rounded-lg border border-forest-200 px-3 py-2 text-xs font-medium hover:bg-forest-50"
+                        title="Let the front desk know this customer hasn't shown up — this won't cancel anything"
+                      >
+                        Not shown up
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -165,6 +171,7 @@ export default function ProviderDashboard() {
                   </div>
                 )}
               </RoomCard>
+              </div>
             );
           })}
         </div>

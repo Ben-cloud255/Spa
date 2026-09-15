@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import RoomCard from '@/components/RoomCard';
 import BranchFilter from '@/components/BranchFilter';
 import OnHoldList from '@/components/OnHoldList';
+import DetailedStatCard from '@/components/DetailedStatCard';
 import type { Booking } from '@/lib/types';
 
 function money(n: number) {
@@ -61,6 +62,64 @@ export default function AdminOverviewPage() {
     return { active, pending, free, todaysRevenue, customersServedToday };
   }, [rooms, bookings]);
 
+  // When looking at every branch, break these two numbers down by branch —
+  // once a specific branch is chosen, that split is meaningless, so switch
+  // to a per-provider breakdown instead.
+  const groupKey: 'branch_name' | 'provider_name' = branchId ? 'provider_name' : 'branch_name';
+  const groupLabel = branchId ? 'By provider' : 'By branch';
+
+  const revenueSections = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todays = bookings.filter((b) => new Date(b.created_at) >= today && Number(b.amount_paid) > 0);
+    const groups = new Map<string, Booking[]>();
+    for (const b of todays) {
+      const key = b[groupKey] || 'Unassigned';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(b);
+    }
+    return [...groups.entries()]
+      .sort((a, b) => b[1].reduce((s, x) => s + Number(x.amount_paid), 0) - a[1].reduce((s, x) => s + Number(x.amount_paid), 0))
+      .map(([heading, group]) => ({
+        heading,
+        total: `${money(group.reduce((s, b) => s + Number(b.amount_paid), 0))} TZS`,
+        rows: group
+          .sort((a, b) => Number(b.amount_paid) - Number(a.amount_paid))
+          .map((b) => ({
+            label: b.customer_name,
+            sublabel: `${b.provider_name} · recorded by ${b.receptionist_name}`,
+            value: `${money(Number(b.amount_paid))} TZS`,
+          })),
+      }));
+  }, [bookings, groupKey]);
+
+  const customersServedSections = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const completedToday = bookings.filter(
+      (b) => b.status === 'completed' && b.ended_at && new Date(b.ended_at) >= today
+    );
+    const groups = new Map<string, Booking[]>();
+    for (const b of completedToday) {
+      const key = b[groupKey] || 'Unassigned';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(b);
+    }
+    return [...groups.entries()]
+      .sort((a, b) => b[1].length - a[1].length)
+      .map(([heading, group]) => ({
+        heading,
+        total: `${group.length} customer${group.length === 1 ? '' : 's'}`,
+        rows: group
+          .sort((a, b) => new Date(b.ended_at!).getTime() - new Date(a.ended_at!).getTime())
+          .map((b) => ({
+            label: b.customer_name,
+            sublabel: `${b.service_name} · ${b.provider_name}`,
+            value: new Date(b.ended_at!).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+          })),
+      }));
+  }, [bookings, groupKey]);
+
   return (
     <div>
       <div className="flex items-start justify-between flex-wrap gap-3 mb-1">
@@ -72,11 +131,34 @@ export default function AdminOverviewPage() {
       </p>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-        <StatCard label="In session" value={String(stats.active)} hint={`of ${rooms.length} rooms`} />
-        <StatCard label="Awaiting confirmation" value={String(stats.pending)} />
-        <StatCard label="Free rooms" value={String(stats.free)} />
-        <StatCard label="Revenue today" value={`${money(stats.todaysRevenue)}`} hint="TZS collected" />
-        <StatCard label="Customers served today" value={String(stats.customersServedToday)} />
+        <div className="animate-fadeInUp" style={{ animationDelay: '0ms' }}>
+          <StatCard label="In session" value={String(stats.active)} hint={`of ${rooms.length} rooms`} />
+        </div>
+        <div className="animate-fadeInUp" style={{ animationDelay: '40ms' }}>
+          <StatCard label="Awaiting confirmation" value={String(stats.pending)} />
+        </div>
+        <div className="animate-fadeInUp" style={{ animationDelay: '80ms' }}>
+          <StatCard label="Free rooms" value={String(stats.free)} />
+        </div>
+        <div className="animate-fadeInUp" style={{ animationDelay: '120ms' }}>
+          <DetailedStatCard
+            label="Revenue today"
+            value={`${money(stats.todaysRevenue)}`}
+            hint="TZS collected"
+            sections={revenueSections}
+            modalTitle="Revenue collected today"
+            modalHint={groupLabel}
+          />
+        </div>
+        <div className="animate-fadeInUp" style={{ animationDelay: '160ms' }}>
+          <DetailedStatCard
+            label="Customers served today"
+            value={String(stats.customersServedToday)}
+            sections={customersServedSections}
+            modalTitle="Customers served today"
+            modalHint={groupLabel}
+          />
+        </div>
       </div>
 
       <OnHoldList branchId={branchId} />
@@ -85,11 +167,19 @@ export default function AdminOverviewPage() {
         <div className="xl:col-span-2">
           <h2 className="font-display text-xl mb-4">Rooms</h2>
           {loading ? (
-            <p className="text-forest-500/70">Loading rooms…</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="h-40 rounded-xl2 border border-forest-100 bg-white overflow-hidden relative">
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-sand-200/60 to-transparent bg-[length:400px_100%] animate-shimmer" />
+                </div>
+              ))}
+            </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              {rooms.map((room) => (
-                <RoomCard key={room.id} room={room} />
+              {rooms.map((room, i) => (
+                <div key={room.id} className="animate-fadeInUp" style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}>
+                  <RoomCard room={room} />
+                </div>
               ))}
               {rooms.length === 0 && (
                 <p className="text-forest-500/60 text-sm">No rooms found for this branch yet.</p>

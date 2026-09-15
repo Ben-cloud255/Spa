@@ -46,6 +46,37 @@ const config: Config = {
       borderRadius: {
         xl2: '1.25rem',
       },
+      keyframes: {
+        fadeInUp: {
+          '0%': { opacity: '0', transform: 'translateY(8px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        modalBackdropIn: {
+          '0%': { opacity: '0' },
+          '100%': { opacity: '1' },
+        },
+        modalContentIn: {
+          '0%': { opacity: '0', transform: 'scale(0.96) translateY(6px)' },
+          '100%': { opacity: '1', transform: 'scale(1) translateY(0)' },
+        },
+        pulseOnce: {
+          '0%': { transform: 'scale(1)' },
+          '30%': { transform: 'scale(1.18)' },
+          '60%': { transform: 'scale(0.95)' },
+          '100%': { transform: 'scale(1)' },
+        },
+        shimmer: {
+          '0%': { backgroundPosition: '-400px 0' },
+          '100%': { backgroundPosition: '400px 0' },
+        },
+      },
+      animation: {
+        fadeInUp: 'fadeInUp 0.45s ease-out both',
+        modalBackdropIn: 'modalBackdropIn 0.18s ease-out both',
+        modalContentIn: 'modalContentIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both',
+        pulseOnce: 'pulseOnce 0.5s ease-in-out',
+        shimmer: 'shimmer 1.6s ease-in-out infinite',
+      },
     },
   },
   plugins: [],

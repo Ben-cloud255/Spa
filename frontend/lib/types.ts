@@ -17,6 +17,7 @@ export interface User {
   branch_id: number | null;
   branch_name: string | null;
   is_active: boolean;
+  is_busy?: boolean;
   avatar_url: string | null;
   created_at?: string;
 }
@@ -46,12 +47,15 @@ export interface BookingSummary {
   customerPhone: string;
   status: 'pending' | 'active' | 'completed' | 'cancelled' | 'on_hold' | 'awaiting_payment';
   pendingStartedAt: string | null;
+  pendingNotified?: boolean;
+  noShowReportedAt?: string | null;
   activeStartedAt: string | null;
   expectedEndAt: string | null;
   extendedMinutes: number;
   paymentStatus: 'unpaid' | 'partial' | 'paid';
   amountDue: number;
   amountPaid: number;
+  provider: { id: number; name: string } | null;
   service: { id: number; name: string; durationMinutes: number };
   pendingAddon: { name: string; minutes: number; price: number } | null;
 }
@@ -189,4 +193,47 @@ export interface ReportSummary {
   byService: ReportServiceRow[];
   byProvider: ReportProviderRow[];
   byDay: ReportDayRow[];
+}
+
+export interface ExecutiveReport {
+  range: { from: string; to: string };
+  scope: { branchId: number | null; providerId: number | null; serviceId: number | null };
+  totals: {
+    bookingsCount: number;
+    completedCount: number;
+    cancelledCount: number;
+    activeOrPendingCount: number;
+    noShowCount: number;
+    cancellationRate: number;
+    noShowRate: number;
+    revenueCollected: number;
+    revenueExpected: number;
+    revenueOutstanding: number;
+  };
+  byBranch: {
+    branchId: number | null;
+    branchName: string;
+    bookingsCount: number;
+    cancelledCount: number;
+    completedCount: number;
+    revenueExpected: number;
+    revenueCollected: number;
+    cancellationRate: number;
+  }[];
+  byService: {
+    serviceId: number;
+    serviceName: string;
+    bookingsCount: number;
+    revenueExpected: number;
+    revenueCollected: number;
+  }[];
+  byProvider: {
+    providerId: number;
+    providerName: string;
+    bookingsCount: number;
+    sessionsCompleted: number;
+    revenueCollected: number;
+  }[];
+  peakHour: string | null;
+  quietHour: string | null;
 }

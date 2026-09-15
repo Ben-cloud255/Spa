@@ -6,14 +6,17 @@ const ROOM_SELECT = `
     r.provider_id, p.name AS provider_name,
     r.branch_id, br.name AS branch_name,
     b.id AS booking_id, b.customer_name, b.customer_phone,
-    b.status AS booking_status, b.pending_started_at, b.active_started_at,
+    b.status AS booking_status, b.pending_started_at, b.active_started_at, b.pending_notified,
+    b.no_show_reported_at,
     b.expected_end_at, b.extended_minutes, b.payment_status, b.amount_due, b.amount_paid,
     b.pending_addon_minutes, b.pending_addon_price, pa.name AS pending_addon_name,
+    b.provider_id AS booking_provider_id, bp.name AS booking_provider_name,
     s.id AS service_id, s.name AS service_name, s.duration_minutes AS service_duration
   FROM rooms r
   LEFT JOIN users p ON p.id = r.provider_id
   LEFT JOIN branches br ON br.id = r.branch_id
   LEFT JOIN bookings b ON b.room_id = r.id AND b.status IN ('pending', 'active', 'awaiting_payment')
+  LEFT JOIN users bp ON bp.id = b.provider_id
   LEFT JOIN services s ON s.id = b.service_id
   LEFT JOIN services pa ON pa.id = b.pending_addon_service_id
 `;
@@ -34,12 +37,15 @@ function shapeRoom(row) {
           customerPhone: row.customer_phone,
           status: row.booking_status,
           pendingStartedAt: row.pending_started_at,
+          pendingNotified: row.pending_notified,
+          noShowReportedAt: row.no_show_reported_at,
           activeStartedAt: row.active_started_at,
           expectedEndAt: row.expected_end_at,
           extendedMinutes: row.extended_minutes,
           paymentStatus: row.payment_status,
           amountDue: row.amount_due,
           amountPaid: row.amount_paid,
+          provider: row.booking_provider_id ? { id: row.booking_provider_id, name: row.booking_provider_name } : null,
           service: { id: row.service_id, name: row.service_name, durationMinutes: row.service_duration },
           pendingAddon: row.pending_addon_name
             ? { name: row.pending_addon_name, minutes: row.pending_addon_minutes, price: row.pending_addon_price }

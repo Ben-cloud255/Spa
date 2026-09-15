@@ -43,6 +43,9 @@ const ROOM_NAMES_BY_BRANCH = {
 // the booking dropdown stays short even as the menu grows.
 const CATEGORIES = ['Massage'];
 
+// Common ways customers actually pay in Tanzania — admin can add/hide more later.
+const PAYMENT_METHODS = ['Cash', 'Card', 'M-Pesa', 'Tigo Pesa', 'Airtel Money', 'HaloPesa'];
+
 const SERVICES = [
   { name: 'Full Body Massage', description: 'A complete head-to-toe relaxation massage.', duration_minutes: 90, price: 60000, category: 'Massage' },
   { name: 'Swedish Massage', description: 'Gentle, flowing strokes to ease tension.', duration_minutes: 60, price: 45000, category: 'Massage' },
@@ -164,6 +167,15 @@ async function seed() {
       }
     }
     console.log(`Seeded ${CATEGORIES.length} service categor${CATEGORIES.length === 1 ? 'y' : 'ies'}.`);
+
+    // --- Payment methods ---
+    for (const name of PAYMENT_METHODS) {
+      const exists = await client.query('SELECT id FROM payment_methods WHERE name = $1', [name]);
+      if (exists.rowCount === 0) {
+        await client.query('INSERT INTO payment_methods (name) VALUES ($1)', [name]);
+      }
+    }
+    console.log(`Seeded ${PAYMENT_METHODS.length} payment method(s).`);
 
     // --- Services (shared across all branches) ---
     for (const s of SERVICES) {

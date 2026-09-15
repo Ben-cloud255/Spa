@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS users (
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id INTEGER REFERENCES branches(id) ON DELETE SET NULL;
 
+CREATE TABLE IF NOT EXISTS payment_methods (
+  id         SERIAL PRIMARY KEY,
+  name       VARCHAR(60) NOT NULL UNIQUE,
+  is_active  BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS service_categories (
   id         SERIAL PRIMARY KEY,
   name       VARCHAR(80) NOT NULL UNIQUE,
@@ -95,6 +102,7 @@ CREATE TABLE IF NOT EXISTS bookings (
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS branch_id INTEGER REFERENCES branches(id) ON DELETE SET NULL;
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS warning_notified BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS on_hold_at TIMESTAMPTZ;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS no_show_reported_at TIMESTAMPTZ;
 -- An extra service a provider requests after the original session already
 -- ended sits here, unapplied, until the receptionist collects full payment
 -- for it — see 'awaiting_payment' below. Cleared back to NULL once applied

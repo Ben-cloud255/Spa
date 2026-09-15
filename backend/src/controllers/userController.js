@@ -1,16 +1,29 @@
 const bcrypt = require('bcrypt');
 const db = require('../config/db');
+const { sendCredentialsEmail } = require('../utils/mailer');
 
 const USER_SELECT = `
   SELECT u.id, u.name, u.email, u.phone, u.role, u.branch_id, b.name AS branch_name,
-         u.is_active, u.avatar_url, u.created_at
+         u.is_active, u.avatar_url, u.created_at,
+         EXISTS (
+           SELECT 1 FROM bookings bk WHERE bk.provider_id = u.id AND bk.status IN ('pending', 'active')
+         ) AS is_busy
   FROM users u
   LEFT JOIN branches b ON b.id = u.branch_id
 `;
 
 async function listUsers(req, res) {
   try {
-    const { role, branchId } = req.query;
+    let { role, branchId, includeInactive } = req.query;
+
+    // Receptionists only ever need the provider roster for their own branch —
+    // enforce that server-side rather than trusting the query params.
+    if (req.user.role === 'receptionist') {
+      role = 'provider';
+      branchId = req.user.branchId;
+      includeInactive = undefined;
+    }
+
     const clauses = [];
     const params = [];
     if (role) {
@@ -20,6 +33,9 @@ async function listUsers(req, res) {
     if (branchId) {
       params.push(branchId);
       clauses.push(`u.branch_id = $${params.length}`);
+    }
+    if (!includeInactive) {
+      clauses.push('u.is_active = TRUE');
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const result = await db.query(`${USER_SELECT} ${where} ORDER BY u.created_at DESC`, params);
@@ -56,6 +72,12 @@ async function createUser(req, res) {
       [name.trim(), email.trim().toLowerCase(), phone || null, hash, role, role === 'admin' ? null : branch_id]
     );
     const full = await db.query(`${USER_SELECT} WHERE u.id = $1`, [result.rows[0].id]);
+
+    // Best-effort — a failed email should never undo the account that was
+    // just created (that would strand the admin with an account they can't
+    // hand over credentials for another way).
+    sendCredentialsEmail({ to: email.trim().toLowerCase(), name: name.trim(), email: email.trim().toLowerCase(), password, role });
+
     return res.status(201).json({ user: full.rows[0] });
   } catch (err) {
     console.error('Create user error:', err);
@@ -95,10 +117,22 @@ async function resetPassword(req, res) {
   }
   try {
     const hash = await bcrypt.hash(newPassword, 10);
-    const result = await db.query('UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING id', [hash, id]);
+    const result = await db.query(
+      'UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING name, email, role',
+      [hash, id]
+    );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Account not found.' });
     }
+    const account = result.rows[0];
+    sendCredentialsEmail({
+      to: account.email,
+      name: account.name,
+      email: account.email,
+      password: newPassword,
+      role: account.role,
+      isReset: true,
+    });
     return res.json({ message: 'Password reset successfully.' });
   } catch (err) {
     console.error('Reset password error:', err);

@@ -16,9 +16,12 @@ function money(n: number) {
   return new Intl.NumberFormat('en-TZ').format(n);
 }
 
+const RECENT_DAYS = 30;
+
 export default function BookingHistoryPage() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAllHistory, setShowAllHistory] = useState(false);
 
   useEffect(() => {
     api.get<{ bookings: Booking[] }>('/bookings').then((d) => {
@@ -27,10 +30,19 @@ export default function BookingHistoryPage() {
     });
   }, []);
 
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - RECENT_DAYS);
+  const displayedBookings = bookings.filter((b) => showAllHistory || new Date(b.created_at) >= cutoff);
+
   return (
     <div>
       <h1 className="font-display text-3xl mb-1">Booking history</h1>
-      <p className="text-forest-500/70 text-sm mb-8">Every booking recorded at the front desk.</p>
+      <p className="text-forest-500/70 text-sm mb-3">Every booking recorded at the front desk.</p>
+
+      <label className="flex items-center gap-2 text-sm text-forest-600 mb-6">
+        <input type="checkbox" checked={showAllHistory} onChange={(e) => setShowAllHistory(e.target.checked)} />
+        Show bookings older than {RECENT_DAYS} days
+      </label>
 
       {loading ? (
         <p className="text-forest-500/70">Loading…</p>
@@ -50,7 +62,7 @@ export default function BookingHistoryPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-forest-50">
-              {bookings.map((b) => (
+              {displayedBookings.map((b) => (
                 <tr key={b.id}>
                   <td className="px-4 py-3">
                     <p className="font-medium text-ink">{b.customer_name}</p>
@@ -72,10 +84,10 @@ export default function BookingHistoryPage() {
                   </td>
                 </tr>
               ))}
-              {bookings.length === 0 && (
+              {displayedBookings.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-forest-500/60">
-                    No bookings recorded yet.
+                    {bookings.length === 0 ? 'No bookings recorded yet.' : `No bookings in the last ${RECENT_DAYS} days — check "Show older" above.`}
                   </td>
                 </tr>
               )}

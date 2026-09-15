@@ -35,8 +35,8 @@ export default function ChangePasswordModal({ onClose }: { onClose: () => void }
   }
 
   return (
-    <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl2 shadow-card w-full max-w-sm p-6">
+    <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-modalBackdropIn">
+      <div className="bg-white rounded-xl2 shadow-card w-full max-w-sm p-6 animate-modalContentIn">
         <h2 className="font-display text-2xl mb-1">Change your password</h2>
 
         {success ? (

@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect, useState, FormEvent } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import type { Branch } from '@/lib/types';
 
 export default function AdminBranchesPage() {
+  const searchParams = useSearchParams();
+  const focusId = searchParams.get('focus');
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
@@ -12,6 +15,7 @@ export default function AdminBranchesPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showInactive, setShowInactive] = useState(true);
+  const [highlightId, setHighlightId] = useState<number | null>(null);
 
   async function load() {
     try {
@@ -25,6 +29,16 @@ export default function AdminBranchesPage() {
   }
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (!focusId || loading) return;
+    const id = Number(focusId);
+    setHighlightId(id);
+    const el = document.getElementById(`branch-card-${id}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = setTimeout(() => setHighlightId(null), 2500);
+    return () => clearTimeout(timer);
+  }, [focusId, loading, branches]);
 
   async function createBranch(e: FormEvent) {
     e.preventDefault(); setError(null); setSubmitting(true);
@@ -83,7 +97,11 @@ export default function AdminBranchesPage() {
           {visible.map((b) => {
             const active = b.is_active !== false;
             return (
-              <div key={b.id} className={`bg-white rounded-xl2 border shadow-card p-5 ${active ? 'border-forest-100' : 'border-clay/20 opacity-70'}`}>
+              <div
+                key={b.id}
+                id={`branch-card-${b.id}`}
+                className={`bg-white rounded-xl2 border shadow-card p-5 transition-shadow ${active ? 'border-forest-100' : 'border-clay/20 opacity-70'} ${highlightId === b.id ? 'ring-2 ring-honey-500' : ''}`}
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h3 className="font-display text-xl">{b.name}</h3>

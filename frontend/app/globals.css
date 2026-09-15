@@ -76,35 +76,39 @@ html, body {
     padding: 0 !important;
   }
 
-  /* Professional, letterhead-style report printing — deliberately distinct
-     from the on-screen dashboard look (no colored cards/shadows/pills). */
+  /* Document-style report printing. Colors are intentionally NOT stripped
+     here — the whole point is that what you see on screen after
+     "Generate report" is exactly what comes out the printer / Save as PDF,
+     no separate grayscale mode. print-color-adjust above already makes
+     backgrounds/colors survive the print dialog. */
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
   #report-content {
     font-family: Georgia, 'Times New Roman', serif;
+    /* 100vh is unreliable during print (Chrome often sizes it off the
+       browser window, not the paper), which is why the footer wasn't
+       actually reaching the bottom of the page before. Using the real A4
+       height minus the @page margins above makes this the true printed
+       page height, so mt-auto on the footer has real room to push into. */
+    min-height: calc(297mm - 24mm);
+    background: #ffffff !important;
   }
-  #report-content,
+  html, body, .print-shell-main {
+    background: #ffffff !important;
+  }
   #report-content * {
-    color: #1a1a1a !important;
-    background-color: transparent !important;
     box-shadow: none !important;
-    border-color: #d0d0d0 !important;
-  }
-  .print-header {
-    display: block !important;
   }
   #report-content table {
     border-collapse: collapse;
     width: 100%;
     table-layout: fixed;
   }
-  #report-content th {
-    background-color: #f3f1ea !important;
-    font-weight: 600;
-    border-bottom: 1px solid #999 !important;
-    text-align: left;
-  }
   #report-content th,
   #report-content td {
-    border-bottom: 1px solid #e2e2e2 !important;
+    border-bottom: 1px solid rgba(0,0,0,0.08);
     font-size: 10.5px;
     padding: 5px 6px !important;
     white-space: normal !important;
@@ -114,18 +118,6 @@ html, body {
   #report-content tr {
     break-inside: avoid;
     page-break-inside: avoid;
-  }
-  #report-content .rounded-xl2,
-  #report-content .rounded-lg {
-    border-radius: 2px !important;
-  }
-  #report-content .rounded-full {
-    border-radius: 2px !important;
-    padding: 1px 6px !important;
-    border: 1px solid #999 !important;
-  }
-  #report-content .print-bar {
-    fill: #3f3f3f !important;
   }
   #report-content .overflow-x-auto {
     overflow: visible !important;

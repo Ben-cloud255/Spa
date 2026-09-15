@@ -9,7 +9,7 @@ import PaymentModal from '@/components/PaymentModal';
 import PaymentRequestModal from '@/components/PaymentRequestModal';
 import type { Booking } from '@/lib/types';
 import OnHoldList from '@/components/OnHoldList';
-import type { Room, Service } from '@/lib/types';
+import type { Room, Service, User } from '@/lib/types';
 
 function money(n: number) {
   return n.toLocaleString('en-TZ');
@@ -18,12 +18,18 @@ function money(n: number) {
 export default function ReceptionistDashboard() {
   const { rooms, loading, refresh } = useRooms();
   const [services, setServices] = useState<Service[]>([]);
+  const [providers, setProviders] = useState<User[]>([]);
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [paymentRoom, setPaymentRoom] = useState<Room | null>(null);
   const [paymentRequests, setPaymentRequests] = useState<Booking[]>([]);
   const [paymentBooking, setPaymentBooking] = useState<Booking | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  async function loadProviders() {
+    const data = await api.get<{ users: User[] }>('/users?role=provider');
+    setProviders(data.users);
+  }
 
   async function loadPaymentRequests() {
     try {
@@ -40,8 +46,12 @@ export default function ReceptionistDashboard() {
 
   useEffect(() => {
     api.get<{ services: Service[] }>('/services').then((d) => setServices(d.services));
+    loadProviders();
     loadPaymentRequests();
-    const timer = window.setInterval(loadPaymentRequests, 15000);
+    const timer = window.setInterval(() => {
+      loadPaymentRequests();
+      loadProviders();
+    }, 15000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -87,7 +97,10 @@ export default function ReceptionistDashboard() {
           </p>
         </div>
         <button
-          onClick={() => setShowBookingModal(true)}
+          onClick={() => {
+            loadProviders();
+            setShowBookingModal(true);
+          }}
           className="rounded-lg bg-forest-600 text-sand-50 px-4 py-2.5 text-sm font-medium hover:bg-forest-700"
         >
           + New booking
@@ -135,8 +148,9 @@ export default function ReceptionistDashboard() {
         <p className="text-forest-500/70">Loading rooms…</p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-          {rooms.map((room) => (
-            <RoomCard key={room.id} room={room}>
+          {rooms.map((room, i) => (
+            <div key={room.id} className="animate-fadeInUp" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
+              <RoomCard room={room}>
               <div className="space-y-2">
                 {room.currentBooking?.status === 'pending' && (
                   <button
@@ -156,7 +170,8 @@ export default function ReceptionistDashboard() {
                   </button>
                 )}
               </div>
-            </RoomCard>
+              </RoomCard>
+            </div>
           ))}
         </div>
       )}
@@ -165,8 +180,12 @@ export default function ReceptionistDashboard() {
         <NewBookingModal
           rooms={rooms}
           services={services}
+          providers={providers}
           onClose={() => setShowBookingModal(false)}
-          onCreated={refresh}
+          onCreated={() => {
+            refresh();
+            loadProviders();
+          }}
         />
       )}
       {paymentRoom && (

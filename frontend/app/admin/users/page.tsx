@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, FormEvent } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { useBranches } from '@/lib/useBranches';
 import BranchFilter from '@/components/BranchFilter';
@@ -14,17 +15,40 @@ const ROLE_LABEL: Record<string, string> = {
 
 export default function AdminUsersPage() {
   const { branches } = useBranches();
+  const searchParams = useSearchParams();
+  const focusId = searchParams.get('focus');
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterBranch, setFilterBranch] = useState('');
+  const [filterRole, setFilterRole] = useState('');
+  const [showHidden, setShowHidden] = useState(false);
+  const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', role: 'receptionist', branch_id: '' });
   const [resetTarget, setResetTarget] = useState<User | null>(null);
   const [resetPassword, setResetPassword] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [highlightId, setHighlightId] = useState<number | null>(null);
+
+  // Arriving from the global search: make sure nothing is hiding the row
+  // we're being pointed at, regardless of whatever filters were already set.
+  useEffect(() => {
+    if (!focusId) return;
+    setShowHidden(true);
+    setFilterBranch('');
+    setFilterRole('');
+    setSearch('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId]);
 
   async function load() {
     setLoading(true);
-    const query = filterBranch ? `?branchId=${filterBranch}` : '';
+    const params = new URLSearchParams();
+    if (filterBranch) params.set('branchId', filterBranch);
+    if (filterRole) params.set('role', filterRole);
+    if (showHidden) params.set('includeInactive', 'true');
+    const query = params.toString() ? `?${params.toString()}` : '';
     const data = await api.get<{ users: User[] }>(`/users${query}`);
     setUsers(data.users);
     setLoading(false);
@@ -33,12 +57,47 @@ export default function AdminUsersPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterBranch]);
+  }, [filterBranch, filterRole, showHidden]);
 
   useEffect(() => {
     if (!form.branch_id && branches.length > 0) setForm((f) => ({ ...f, branch_id: String(branches[0].id) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branches]);
+
+  // Selection is cleared whenever the visible list changes shape, so a
+  // stale checkbox never points at someone no longer on screen.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [filterBranch, filterRole, showHidden, search]);
+
+  useEffect(() => {
+    if (!focusId || loading) return;
+    const id = Number(focusId);
+    setHighlightId(id);
+    const el = document.getElementById(`user-row-${id}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = setTimeout(() => setHighlightId(null), 2500);
+    return () => clearTimeout(timer);
+  }, [focusId, loading, users]);
+
+  const displayedUsers = users.filter((u) => {
+    if (!search.trim()) return true;
+    const q = search.trim().toLowerCase();
+    return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || (u.phone || '').toLowerCase().includes(q);
+  });
+
+  function toggleSelect(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((prev) => (prev.size === displayedUsers.length ? new Set() : new Set(displayedUsers.map((u) => u.id))));
+  }
 
   async function createUser(e: FormEvent) {
     e.preventDefault();
@@ -60,6 +119,23 @@ export default function AdminUsersPage() {
     load();
   }
 
+  async function bulkSetActive(active: boolean) {
+    const targets = displayedUsers.filter((u) => selectedIds.has(u.id) && u.is_active !== active);
+    if (targets.length === 0) return;
+    const verb = active ? 'reactivate' : 'deactivate';
+    if (!window.confirm(`${active ? 'Reactivate' : 'Deactivate'} ${targets.length} staff account${targets.length === 1 ? '' : 's'}?`)) {
+      return;
+    }
+    setBulkBusy(true);
+    setError(null);
+    const results = await Promise.allSettled(targets.map((u) => api.patch(`/users/${u.id}`, { is_active: active })));
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    if (failed > 0) setError(`Could not ${verb} ${failed} of ${targets.length} accounts.`);
+    setSelectedIds(new Set());
+    setBulkBusy(false);
+    load();
+  }
+
   async function submitReset(e: FormEvent) {
     e.preventDefault();
     if (!resetTarget) return;
@@ -76,11 +152,37 @@ export default function AdminUsersPage() {
     <div>
       <div className="flex items-start justify-between flex-wrap gap-3 mb-1">
         <h1 className="font-display text-3xl">Staff accounts</h1>
-        <BranchFilter value={filterBranch} onChange={setFilterBranch} />
+        <div className="flex flex-wrap items-center gap-3">
+          <select
+            value={filterRole}
+            onChange={(e) => setFilterRole(e.target.value)}
+            className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
+          >
+            <option value="">All roles</option>
+            <option value="admin">Admin</option>
+            <option value="receptionist">Receptionist</option>
+            <option value="provider">Service provider</option>
+          </select>
+          <BranchFilter value={filterBranch} onChange={setFilterBranch} />
+          <label className="flex items-center gap-2 text-sm text-forest-600">
+            <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
+            Show hidden staff
+          </label>
+        </div>
       </div>
-      <p className="text-forest-500/70 text-sm mb-8">
+      <p className="text-forest-500/70 text-sm mb-6">
         Create logins for receptionists and service providers at any branch. Each person signs in with their own account.
       </p>
+
+      <div className="mb-6">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search staff by name, email or phone…"
+          className="w-full sm:w-80 rounded-lg border border-forest-200 px-3.5 py-2.5 text-sm"
+        />
+      </div>
 
       <form onSubmit={createUser} className="bg-white rounded-xl2 border border-forest-100 shadow-card p-5 grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8 items-end">
         <div>
@@ -157,6 +259,34 @@ export default function AdminUsersPage() {
         {error && <p className="text-sm text-clay sm:col-span-3">{error}</p>}
       </form>
 
+      {selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center gap-3 mb-3 bg-forest-50 border border-forest-200 rounded-lg px-4 py-2.5">
+          <p className="text-sm font-medium text-forest-700">
+            {selectedIds.size} account{selectedIds.size === 1 ? '' : 's'} selected
+          </p>
+          <button
+            onClick={() => bulkSetActive(true)}
+            disabled={bulkBusy}
+            className="rounded-lg border border-forest-300 bg-white text-forest-700 px-3 py-1.5 text-xs font-medium hover:bg-forest-50 disabled:opacity-50"
+          >
+            Reactivate
+          </button>
+          <button
+            onClick={() => bulkSetActive(false)}
+            disabled={bulkBusy}
+            className="rounded-lg border border-clay/40 bg-white text-clay px-3 py-1.5 text-xs font-medium hover:bg-clay/5 disabled:opacity-50"
+          >
+            Deactivate
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-xs font-medium text-forest-500 hover:text-forest-700 ml-auto"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <p className="text-forest-500/70">Loading…</p>
       ) : (
@@ -165,6 +295,14 @@ export default function AdminUsersPage() {
           <table className="w-full text-sm">
             <thead className="bg-sand-100/70 text-forest-600 text-xs uppercase tracking-wide">
               <tr>
+                <th className="px-4 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={displayedUsers.length > 0 && selectedIds.size === displayedUsers.length}
+                    onChange={toggleSelectAll}
+                    aria-label="Select all staff"
+                  />
+                </th>
                 <th className="text-left px-4 py-3">Name</th>
                 <th className="text-left px-4 py-3">Email</th>
                 <th className="text-left px-4 py-3">Role</th>
@@ -174,9 +312,24 @@ export default function AdminUsersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-forest-50">
-              {users.map((u) => (
-                <tr key={u.id} className={u.is_active ? '' : 'opacity-50'}>
-                  <td className="px-4 py-3 font-medium">{u.name}</td>
+              {displayedUsers.map((u) => (
+                <tr
+                  key={u.id}
+                  id={`user-row-${u.id}`}
+                  className={`transition-colors ${u.is_active ? '' : 'opacity-50'} ${highlightId === u.id ? 'bg-honey-500/20' : ''}`}
+                >
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(u.id)}
+                      onChange={() => toggleSelect(u.id)}
+                      aria-label={`Select ${u.name}`}
+                    />
+                  </td>
+                  <td className="px-4 py-3 font-medium">
+                    {u.name}
+                    {!u.is_active && <span className="ml-2 text-xs text-clay font-normal">Hidden</span>}
+                  </td>
                   <td className="px-4 py-3">{u.email}</td>
                   <td className="px-4 py-3">{ROLE_LABEL[u.role]}</td>
                   <td className="px-4 py-3">{u.branch_name || (u.role === 'admin' ? 'All branches' : '—')}</td>
@@ -191,6 +344,13 @@ export default function AdminUsersPage() {
                   </td>
                 </tr>
               ))}
+              {displayedUsers.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-forest-500/60">
+                    No staff match this search.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
           </div>
@@ -198,8 +358,8 @@ export default function AdminUsersPage() {
       )}
 
       {resetTarget && (
-        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-40 p-4">
-          <div className="bg-white rounded-xl2 shadow-card w-full max-w-sm p-6">
+        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex items-center justify-center z-40 p-4 animate-modalBackdropIn">
+          <div className="bg-white rounded-xl2 shadow-card w-full max-w-sm p-6 animate-modalContentIn">
             <h2 className="font-display text-2xl mb-1">Reset password</h2>
             <p className="text-sm text-forest-500/70 mb-5">{resetTarget.name}</p>
             <form onSubmit={submitReset} className="space-y-4">
