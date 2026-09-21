@@ -13,7 +13,7 @@ function timeSince(iso: string): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
-export default function OnHoldList({ branchId = '' }: { branchId?: string }) {
+export default function OnHoldList({ branchId = '', refreshTrigger = 0 }: { branchId?: string; refreshTrigger?: number }) {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -30,7 +30,8 @@ export default function OnHoldList({ branchId = '' }: { branchId?: string }) {
 
   useEffect(() => {
     load();
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, refreshTrigger]);
 
   async function release(id: number) {
     if (!window.confirm('Release this booking for good? The room and provider become fully available again.')) return;

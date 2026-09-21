@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const { notify, broadcastRoomUpdate } = require('../utils/notify');
+const { logAudit } = require('../utils/auditLog');
 const { shapeRoom, ROOM_SELECT } = require('./roomController');
 
 async function refreshedRoom(roomId) {
@@ -105,6 +106,13 @@ async function createBooking(req, res) {
 
     await client.query('COMMIT');
 
+    logAudit(req, {
+      action: 'Booking Created',
+      entityType: 'booking',
+      entityLabel: `${customerName.trim()} — ${service.name} in ${room.name}`,
+      branchId: room.branch_id,
+    });
+
     const updatedRoom = await refreshedRoom(room.id);
     broadcastRoomUpdate(updatedRoom);
 
@@ -171,6 +179,13 @@ async function confirmEnd(req, res) {
 
     await db.query(`UPDATE bookings SET status = 'completed', ended_at = NOW() WHERE id = $1`, [id]);
     await db.query(`UPDATE rooms SET status = 'inactive' WHERE id = $1`, [booking.room_id]);
+
+    logAudit(req, {
+      action: 'Service Completed',
+      entityType: 'booking',
+      entityLabel: booking.customer_name,
+      branchId: booking.branch_id,
+    });
 
     const updatedRoom = await refreshedRoom(booking.room_id);
     broadcastRoomUpdate(updatedRoom);
@@ -489,6 +504,13 @@ async function recordPayment(req, res) {
       targetRole: null, // admin-only visibility for financial oversight
     });
 
+    logAudit(req, {
+      action: 'Payment Recorded',
+      entityType: 'booking',
+      entityLabel: `${booking.customer_name} — ${amountNum.toLocaleString()} TZS`,
+      branchId: booking.branch_id,
+    });
+
     const updatedRoom = await refreshedRoom(booking.room_id);
     broadcastRoomUpdate(updatedRoom);
 
@@ -657,6 +679,13 @@ async function holdBooking(req, res) {
     const updatedRoom = await refreshedRoom(booking.room_id);
     broadcastRoomUpdate(updatedRoom);
 
+    logAudit(req, {
+      action: 'Booking Put On Hold',
+      entityType: 'booking',
+      entityLabel: booking.customer_name,
+      branchId: booking.branch_id,
+    });
+
     await notify({
       type: 'booking_on_hold',
       message: `${req.user.name} put ${booking.customer_name}'s booking on hold — the room is free again while they wait to hear back.`,
@@ -755,6 +784,13 @@ async function resumeBooking(req, res) {
 
     await client.query('COMMIT');
 
+    logAudit(req, {
+      action: 'Booking Resumed',
+      entityType: 'booking',
+      entityLabel: `${booking.customer_name} — ${room.name}`,
+      branchId: room.branch_id,
+    });
+
     const updatedRoom = await refreshedRoom(room.id);
     broadcastRoomUpdate(updatedRoom);
 
@@ -792,6 +828,13 @@ async function releaseBooking(req, res) {
       bookingId: booking.id,
       branchId: booking.branch_id,
       targetRole: null, // admin-only visibility
+    });
+
+    logAudit(req, {
+      action: 'Booking Released',
+      entityType: 'booking',
+      entityLabel: booking.customer_name,
+      branchId: booking.branch_id,
     });
 
     return res.json({ message: 'Booking released.' });

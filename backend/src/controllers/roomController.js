@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { logAudit } = require('../utils/auditLog');
 
 const ROOM_SELECT = `
   SELECT
@@ -195,7 +196,18 @@ async function updateRoom(req, res) {
       return res.status(404).json({ error: 'Room not found.' });
     }
     const full = await db.query(`${ROOM_SELECT} WHERE r.id = $1`, [id]);
-    return res.json({ room: shapeRoom(full.rows[0]) });
+    const shaped = shapeRoom(full.rows[0]);
+
+    if (hasProviderField && provider_id) {
+      logAudit(req, {
+        action: 'Provider Assigned',
+        entityType: 'room',
+        entityLabel: `${shaped.name} → ${shaped.provider?.name || 'provider'}`,
+        branchId: shaped.branch?.id || null,
+      });
+    }
+
+    return res.json({ room: shaped });
   } catch (err) {
     console.error('Update room error:', err);
     return res.status(500).json({ error: 'Could not update the room.' });
@@ -208,7 +220,7 @@ async function updateRoom(req, res) {
 async function archiveRoom(req, res) {
   const { id } = req.params;
   try {
-    const current = await db.query('SELECT status FROM rooms WHERE id = $1', [id]);
+    const current = await db.query('SELECT name, branch_id, status FROM rooms WHERE id = $1', [id]);
     if (current.rowCount === 0) {
       return res.status(404).json({ error: 'Room not found.' });
     }
@@ -218,6 +230,12 @@ async function archiveRoom(req, res) {
       });
     }
     await db.query('UPDATE rooms SET is_archived = TRUE WHERE id = $1', [id]);
+    logAudit(req, {
+      action: 'Room Removed',
+      entityType: 'room',
+      entityLabel: current.rows[0].name,
+      branchId: current.rows[0].branch_id,
+    });
     return res.json({ message: 'Room removed.' });
   } catch (err) {
     console.error('Archive room error:', err);

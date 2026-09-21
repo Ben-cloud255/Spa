@@ -38,8 +38,8 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
       {/* Brand panel */}
-      <div className="hidden lg:flex flex-col justify-between bg-forest-700 text-sand-50 p-12 relative overflow-hidden">
-        <div className="absolute inset-0 opacity-[0.07]" aria-hidden>
+      <div className="hidden lg:flex flex-col justify-between text-ink p-12 relative overflow-hidden bg-sand-100">
+        <div className="absolute inset-0 opacity-[0.06]" aria-hidden>
           <svg width="100%" height="100%" viewBox="0 0 400 400" fill="none">
             <path d="M0 200 Q 100 140 200 200 T 400 200" stroke="currentColor" strokeWidth="1" />
             <path d="M0 260 Q 100 200 200 260 T 400 260" stroke="currentColor" strokeWidth="1" />
@@ -47,8 +47,8 @@ export default function LoginPage() {
           </svg>
         </div>
         <div className="relative z-10">
-          <p className="uppercase tracking-[0.3em] text-xs text-forest-200">Staff Portal</p>
-          <h1 className="font-display italic text-5xl mt-4 leading-tight">Serene Spa</h1>
+          <p className="uppercase tracking-[0.3em] text-xs font-bold text-ink">Staff Portal</p>
+          <h1 className="font-display italic text-5xl mt-4 leading-tight font-bold text-ink">Serene Spa</h1>
         </div>
         <div className="relative z-10 space-y-4">
           <div className="aspect-[4/3] w-full rounded-xl2 overflow-hidden">
@@ -61,14 +61,14 @@ export default function LoginPage() {
     priority
   />
 </div>
-          <p className="text-forest-100 text-sm max-w-sm">
+          <p className="text-ink font-bold text-sm max-w-sm">
             Rooms, bookings, and every service session — tracked in one calm, reliable place.
           </p>
         </div>
       </div>
 
       {/* Form panel */}
-      <div className="flex items-center justify-center p-8">
+      <div className="flex items-center justify-center p-8 bg-sand-100">
         <div className="w-full max-w-sm">
           <div className="lg:hidden mb-8 text-center">
             <h1 className="font-display italic text-3xl text-forest-700">Serene Spa</h1>

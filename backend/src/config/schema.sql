@@ -196,3 +196,121 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
 CREATE INDEX IF NOT EXISTS idx_services_category ON services(category_id);
 CREATE INDEX IF NOT EXISTS idx_services_branch ON services(branch_id);
+
+-- Inventory tracking, redesigned around how stock actually moves through
+-- the business:
+--   1. inventory_items is a branch-independent catalog (name/unit/minimum/cost).
+--   2. inventory_branch_stock holds how much of each item currently sits at
+--      each branch, ready to be handed out.
+--   3. inventory_distributions is a permanent log of the admin recording
+--      newly bought stock being handed to a branch (or several branches at
+--      once — one row per branch). Each row also bumps branch_stock.
+--   4. inventory_room_allocations is a permanent log of a receptionist
+--      taking stock out of the branch stockroom and into a specific room
+--      for a service ('in_use'), and later the provider (or admin) marking
+--      it used up ('completed'), with a note and any amount returned.
+-- There is deliberately no automatic consumption tied to bookings — every
+-- movement of stock is something a person explicitly recorded.
+CREATE TABLE IF NOT EXISTS inventory_items (
+  id               SERIAL PRIMARY KEY,
+  name             VARCHAR(120) NOT NULL,
+  unit             VARCHAR(30) NOT NULL DEFAULT 'units',
+  minimum_stock    NUMERIC(12,2) NOT NULL DEFAULT 0,
+  cost_per_unit    NUMERIC(12,2),
+  is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS inventory_branch_stock (
+  id          SERIAL PRIMARY KEY,
+  item_id     INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+  branch_id   INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+  quantity    NUMERIC(12,2) NOT NULL DEFAULT 0,
+  UNIQUE (item_id, branch_id)
+);
+CREATE INDEX IF NOT EXISTS idx_inv_branch_stock_branch ON inventory_branch_stock(branch_id);
+CREATE INDEX IF NOT EXISTS idx_inv_branch_stock_item ON inventory_branch_stock(item_id);
+
+CREATE TABLE IF NOT EXISTS inventory_distributions (
+  id             SERIAL PRIMARY KEY,
+  item_id        INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+  branch_id      INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+  quantity       NUMERIC(12,2) NOT NULL,
+  note           TEXT,
+  recorded_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_inv_distributions_branch ON inventory_distributions(branch_id);
+
+CREATE TABLE IF NOT EXISTS inventory_room_allocations (
+  id                 SERIAL PRIMARY KEY,
+  item_id            INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+  branch_id          INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+  room_id            INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  quantity           NUMERIC(12,2) NOT NULL,
+  note               TEXT,
+  status             VARCHAR(20) NOT NULL DEFAULT 'in_use',
+  assigned_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  assigned_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  completed_at       TIMESTAMPTZ,
+  completion_note    TEXT,
+  quantity_returned  NUMERIC(12,2) NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_inv_allocations_room ON inventory_room_allocations(room_id);
+CREATE INDEX IF NOT EXISTS idx_inv_allocations_branch ON inventory_room_allocations(branch_id);
+CREATE INDEX IF NOT EXISTS idx_inv_allocations_status ON inventory_room_allocations(status);
+
+-- One-time migration off the old single-branch-per-item model: carry
+-- existing current_stock/branch_id values over into inventory_branch_stock,
+-- then drop the old columns. Guarded so re-running this file after the
+-- columns are already gone is a no-op.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'inventory_items' AND column_name = 'current_stock'
+  ) THEN
+    INSERT INTO inventory_branch_stock (item_id, branch_id, quantity)
+    SELECT id, branch_id, current_stock FROM inventory_items
+    WHERE branch_id IS NOT NULL AND current_stock <> 0
+    ON CONFLICT (item_id, branch_id) DO UPDATE SET quantity = inventory_branch_stock.quantity + EXCLUDED.quantity;
+
+    ALTER TABLE inventory_items DROP COLUMN current_stock;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'inventory_items' AND column_name = 'branch_id'
+  ) THEN
+    DROP INDEX IF EXISTS idx_inventory_items_branch;
+    ALTER TABLE inventory_items DROP COLUMN branch_id;
+  END IF;
+END $$;
+
+-- A running record of every action worth being able to answer "who did
+-- this and when" about. actor_name/actor_role are stored as plain text
+-- (not just a user_id FK) so the log still reads correctly even if that
+-- staff account is later deactivated or removed.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id            SERIAL PRIMARY KEY,
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  actor_name    VARCHAR(120) NOT NULL,
+  actor_role    VARCHAR(20) NOT NULL,
+  action        VARCHAR(60) NOT NULL,
+  entity_type   VARCHAR(40) NOT NULL,
+  entity_label  VARCHAR(160) NOT NULL,
+  branch_id     INTEGER REFERENCES branches(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_branch ON audit_log(branch_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+
+-- Central stock awaiting distribution; existing branch balances stay unchanged.
+ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS available_quantity NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (available_quantity >= 0);
+
+BEGIN;
+DROP INDEX IF EXISTS inventory_items_name_unique;
+CREATE UNIQUE INDEX IF NOT EXISTS inventory_items_name_cost_unique ON inventory_items (lower(btrim(name)), cost_per_unit) NULLS NOT DISTINCT;
+COMMIT;
+

@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const db = require('../config/db');
 const { signToken } = require('../utils/jwt');
+const { logAudit } = require('../utils/auditLog');
 
 const USER_WITH_BRANCH_SELECT = `
   SELECT u.id, u.name, u.email, u.phone, u.password_hash, u.role, u.branch_id, u.is_active, u.avatar_url,
@@ -41,6 +42,14 @@ async function login(req, res) {
 
     const token = signToken(user);
     delete user.password_hash;
+
+    logAudit(req, {
+      action: 'Signed In',
+      entityType: 'user',
+      entityLabel: `${user.name} (${user.role})`,
+      branchId: user.branch_id,
+      actor: user,
+    });
 
     return res.json({ token, user });
   } catch (err) {

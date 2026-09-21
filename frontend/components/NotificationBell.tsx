@@ -14,6 +14,7 @@ function timeAgo(iso: string): string {
 }
 
 const TYPE_LABEL: Record<string, string> = {
+  inventory_item_finished: 'Inventory item finished',
   pending_timeout: 'Room not confirmed',
   service_overtime: 'Session overtime',
   extra_service_request: 'Extra service',

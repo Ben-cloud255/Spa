@@ -98,3 +98,30 @@ export function PaymentIcon(p: IconProps) {
     </svg>
   );
 }
+export function InventoryIcon(p: IconProps) {
+  return (
+    <svg {...base} {...p}>
+      <path d="M3 7l9-4 9 4-9 4-9-4Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3 7v10l9 4 9-4V7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 11v10" strokeLinecap="round" />
+    </svg>
+  );
+}
+export function AnalyticsIcon(p: IconProps) {
+  return (
+    <svg {...base} {...p}>
+      <path d="M4 19V9M11 19V4M18 19v-7" strokeLinecap="round" />
+      <path d="M3 19h18" strokeLinecap="round" />
+      <path d="M4 9l4-3 3 2 6-4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+export function AuditLogIcon(p: IconProps) {
+  return (
+    <svg {...base} {...p}>
+      <path d="M9 3h9a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 7l4-4" strokeLinecap="round" />
+      <path d="M9 11h6M9 15h6M9 19h4" strokeLinecap="round" />
+    </svg>
+  );
+}

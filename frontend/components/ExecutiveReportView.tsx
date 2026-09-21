@@ -1,554 +1,101 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { downloadCsv } from '@/lib/csv';
 import { useAuth } from '@/context/AuthContext';
-import type { ExecutiveReport, ReportDetailRow, User, Service, Branch } from '@/lib/types';
+import type { Branch, User, Service } from '@/lib/types';
+import type { ManagementReport, ManagementBooking, ManagementPayment, ManagementRow } from '@/lib/managementReport';
 
-type Preset = 'today' | 'week' | 'month' | 'year' | 'custom';
-type Scope = 'all' | 'branch' | 'provider' | 'service';
-
-const PRESETS: { key: Preset; label: string }[] = [
-  { key: 'today', label: 'Today' },
-  { key: 'week', label: 'This week' },
-  { key: 'month', label: 'This month' },
-  { key: 'year', label: 'This year' },
-  { key: 'custom', label: 'Custom range' },
-];
-
-function toInputDate(d: Date) {
-  return d.toISOString().slice(0, 10);
+const money = (n: number) => new Intl.NumberFormat('en-TZ', {minimumFractionDigits: 0, maximumFractionDigits: 2}).format(n);
+const localDate = () => new Date(Date.now() + 10800000).toISOString().slice(0,10);
+const date = (s: string) => new Date(s).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric',timeZone:'Africa/Nairobi'});
+const stamp = (s: string) => new Date(s).toLocaleString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Africa/Nairobi'});
+const status = (s: string) => s.replaceAll('_',' ');
+function periodRange(preset: string, from: string, to: string) {
+  const now = new Date(), eat = new Date(now.getTime() + 10800000);
+  let start = `${localDate()}T00:00:00+03:00`;
+  if (preset === 'week') {eat.setUTCDate(eat.getUTCDate() - (eat.getUTCDay() + 6) % 7); start = `${eat.toISOString().slice(0,10)}T00:00:00+03:00`;}
+  if (preset === 'month') start = `${localDate().slice(0,7)}-01T00:00:00+03:00`;
+  if (preset === 'year') start = `${localDate().slice(0,4)}-01-01T00:00:00+03:00`;
+  const a = Date.parse(preset === 'custom' ? `${from}T00:00:00+03:00` : start);
+  const b = preset === 'custom' ? Math.min(Date.parse(`${to}T00:00:00+03:00`) + 86400000, now.getTime()) : now.getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a || b-a > 367*86400000) throw new Error('Choose a valid date range of up to one year.');
+  return {from: new Date(a).toISOString(), to: new Date(b).toISOString()};
 }
-
-function rangeForPreset(preset: Preset): { from: string; to: string } {
-  const now = new Date();
-  const to = now.toISOString();
-  if (preset === 'today') {
-    const from = new Date(now);
-    from.setHours(0, 0, 0, 0);
-    return { from: from.toISOString(), to };
-  }
-  if (preset === 'week') {
-    const from = new Date(now);
-    const day = from.getDay() === 0 ? 7 : from.getDay();
-    from.setDate(from.getDate() - (day - 1));
-    from.setHours(0, 0, 0, 0);
-    return { from: from.toISOString(), to };
-  }
-  if (preset === 'month') {
-    const from = new Date(now.getFullYear(), now.getMonth(), 1);
-    return { from: from.toISOString(), to };
-  }
-  if (preset === 'year') {
-    const from = new Date(now.getFullYear(), 0, 1);
-    return { from: from.toISOString(), to };
-  }
-  const from = new Date(now);
-  from.setHours(0, 0, 0, 0);
-  return { from: from.toISOString(), to };
+function Section({index,title,note,children}: {index:string;title:string;note?:string;children:ReactNode}) {
+  return <section className="report-section"><div className="report-section-heading"><span>{index}</span><div><h2>{title}</h2>{note && <p>{note}</p>}</div></div>{children}</section>;
 }
+function Table({headers,children}: {headers:string[];children:ReactNode}) {return <div className="report-table-scroll"><table className="report-table"><thead><tr>{headers.map((h,i)=><th key={i}>{h}</th>)}</tr></thead><tbody>{children}</tbody></table></div>;}
+function None({cols}: {cols:number}) {return <tr><td colSpan={cols} className="report-empty">No records for this period and scope.</td></tr>;}
+function Performance({rows,label}: {rows:ManagementRow[];label:string}) {return <Table headers={[label,'Bookings','Completed','Collected (TZS)']} >{rows.length ? rows.map(r=><tr key={r.id ?? r.name}><td>{r.name}</td><td className="numeric">{r.bookings}</td><td className="numeric">{r.completed}</td><td className="numeric">{money(r.collected)}</td></tr>) : <None cols={4}/>}</Table>;}
+function change(a:number,b:number) {return b ? `${a>=b?'+':''}${((a-b)/b*100).toFixed(1)}%` : a ? 'No prior activity' : 'No change';}
 
-function money(n: number) {
-  return new Intl.NumberFormat('en-TZ').format(Math.round(n));
-}
-
-function pct(n: number) {
-  return `${(n * 100).toFixed(1)}%`;
-}
-
-// Purely rank-based, from real revenue — never invents a rating. Top of the
-// list in its section gets the strongest label, bottom gets flagged for a
-// look, everyone else lands in between.
-function statusLabel(index: number, total: number): { text: string; tone: 'top' | 'good' | 'mid' | 'watch' } {
-  if (total <= 1) return { text: 'ONLY ENTRY', tone: 'mid' };
-  if (index === 0) return { text: 'TOP PERFORMER', tone: 'top' };
-  if (index === total - 1) return { text: 'REVIEW', tone: 'watch' };
-  if (index < total / 2) return { text: 'STRONG', tone: 'good' };
-  return { text: 'AVERAGE', tone: 'mid' };
-}
-
-// Dark, solid pills — matching a formal report's look — not soft app badges.
-const TONE_STYLE: Record<string, { bg: string; color: string }> = {
-  top: { bg: '#122f27', color: '#fdfcf9' },
-  good: { bg: '#2f6b58', color: '#fdfcf9' },
-  mid: { bg: '#c2933d', color: '#fdfcf9' },
-  watch: { bg: '#b1614f', color: '#fdfcf9' },
-};
-
-function Badge({ text, tone }: { text: string; tone: 'top' | 'good' | 'mid' | 'watch' }) {
-  const s = TONE_STYLE[tone];
-  return (
-    <span
-      style={{ background: s.bg, color: s.color, fontSize: 10, letterSpacing: '0.04em', fontWeight: 700 }}
-      className="px-2 py-1 rounded-sm inline-block whitespace-nowrap"
-    >
-      {text}
-    </span>
-  );
-}
-
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <h2
-      className="font-display text-lg tracking-wide uppercase mb-3 pb-2"
-      style={{ borderBottom: '2px solid #152625', color: '#152625' }}
-    >
-      {children}
-    </h2>
-  );
-}
-
-export default function ExecutiveReportView({ allowBranchFilter = false }: { allowBranchFilter?: boolean }) {
-  const { user } = useAuth();
-  const [preset, setPreset] = useState<Preset>('month');
-  const [customFrom, setCustomFrom] = useState(toInputDate(new Date()));
-  const [customTo, setCustomTo] = useState(toInputDate(new Date()));
-  const [scope, setScope] = useState<Scope>('all');
-  const [branchId, setBranchId] = useState('');
-  const [providerId, setProviderId] = useState('');
-  const [serviceId, setServiceId] = useState('');
-
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [providers, setProviders] = useState<User[]>([]);
-  const [services, setServices] = useState<Service[]>([]);
-
-  const [report, setReport] = useState<ExecutiveReport | null>(null);
-  const [detail, setDetail] = useState<ReportDetailRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (allowBranchFilter) api.get<{ branches: Branch[] }>('/branches').then((d) => setBranches(d.branches));
-    api.get<{ users: User[] }>('/users?role=provider').then((d) => setProviders(d.users));
-    api.get<{ services: Service[] }>('/services').then((d) => setServices(d.services));
-  }, [allowBranchFilter]);
-
+export default function ExecutiveReportView({allowBranchFilter=false}: {allowBranchFilter?:boolean}) {
+  const {user} = useAuth();
+  const [preset,setPreset] = useState(allowBranchFilter ? 'month' : 'today');
+  const [from,setFrom]=useState(localDate()),[to,setTo]=useState(localDate());
+  const [branch,setBranch]=useState(''),[provider,setProvider]=useState(''),[service,setService]=useState('');
+  const [branches,setBranches]=useState<Branch[]>([]),[providers,setProviders]=useState<User[]>([]),[services,setServices]=useState<Service[]>([]);
+  const [includeBookings,setIncludeBookings]=useState(false),[includePayments,setIncludePayments]=useState(false),[notes,setNotes]=useState('');
+  const [loading,setLoading]=useState(false),[error,setError]=useState('');
+  const [result,setResult]=useState<{data:ManagementReport;provider:string;service:string;notes:string;bookings:boolean;payments:boolean;preparedBy:string}|null>(null);
+  useEffect(()=>{let live=true;Promise.all([allowBranchFilter?api.get<{branches:Branch[]}>('/branches'):Promise.resolve({branches:[]}),api.get<{users:User[]}>('/users?role=provider'),api.get<{services:Service[]}>('/services')]).then(([b,p,s])=>{if(live){setBranches(b.branches);setProviders(p.users);setServices(s.services);}}).catch(()=>{if(live)setError('Some filters could not be loaded. Refresh the page to try again.');});return()=>{live=false};},[allowBranchFilter]);
   async function generate() {
-    setLoading(true);
-    setError(null);
+    setLoading(true);setError('');
     try {
-      let from: string;
-      let to: string;
-      if (preset === 'custom') {
-        from = new Date(`${customFrom}T00:00:00`).toISOString();
-        to = new Date(`${customTo}T23:59:59`).toISOString();
-      } else {
-        const range = rangeForPreset(preset);
-        from = range.from;
-        to = range.to;
-      }
-      const params = new URLSearchParams({ from, to });
-      if (allowBranchFilter && scope === 'branch' && branchId) params.set('branchId', branchId);
-      if (scope === 'provider' && providerId) params.set('providerId', providerId);
-      if (scope === 'service' && serviceId) params.set('serviceId', serviceId);
-
-      const [executive, detailData] = await Promise.all([
-        api.get<ExecutiveReport>(`/reports/executive?${params.toString()}`),
-        api.get<{ bookings: ReportDetailRow[] }>(`/reports/detail?${params.toString()}`),
-      ]);
-      setReport(executive);
-      setDetail(detailData.bookings);
-    } catch (err) {
-      setError('Could not generate the report. Please try again.');
-    } finally {
-      setLoading(false);
-    }
+      const range=periodRange(preset,from,to), query=new URLSearchParams(range);
+      if(allowBranchFilter&&branch)query.set('branchId',branch);if(provider)query.set('providerId',provider);if(service)query.set('serviceId',service);
+      const data=await api.get<ManagementReport>(`/reports/management?${query}`);
+      setResult({data,provider:providers.find(p=>String(p.id)===provider)?.name||'All providers',service:services.find(s=>String(s.id)===service)?.name||'All services',notes,bookings:includeBookings,payments:includePayments,preparedBy:user?.name||'Staff'});
+    }catch(e){setError(e instanceof Error?e.message:'Could not generate the report.');}finally{setLoading(false);}
   }
-
-  function handleDownloadCsv() {
-    downloadCsv(
-      `serene-spa-report-${toInputDate(new Date())}.csv`,
-      [
-        { label: 'Date', value: (r: ReportDetailRow) => new Date(r.created_at).toLocaleString('en-GB') },
-        { label: 'Customer', value: (r: ReportDetailRow) => r.customer_name },
-        { label: 'Phone', value: (r: ReportDetailRow) => r.customer_phone },
-        { label: 'Branch', value: (r: ReportDetailRow) => r.branch_name || '' },
-        { label: 'Service', value: (r: ReportDetailRow) => r.service_name },
-        { label: 'Extra services', value: (r: ReportDetailRow) => r.extra_services },
-        { label: 'Room', value: (r: ReportDetailRow) => r.room_name },
-        { label: 'Provider', value: (r: ReportDetailRow) => r.provider_name },
-        { label: 'Receptionist', value: (r: ReportDetailRow) => r.receptionist_name },
-        { label: 'Status', value: (r: ReportDetailRow) => r.status },
-        { label: 'Amount due (TZS)', value: (r: ReportDetailRow) => r.amount_due },
-        { label: 'Amount paid (TZS)', value: (r: ReportDetailRow) => r.amount_paid },
-        { label: 'Payment status', value: (r: ReportDetailRow) => r.payment_status },
-      ],
-      detail
-    );
-  }
-
-  const scopeLabel = (() => {
-    if (scope === 'branch') return branches.find((b) => String(b.id) === branchId)?.name || 'Selected branch';
-    if (scope === 'provider') return providers.find((p) => String(p.id) === providerId)?.name || 'Selected provider';
-    if (scope === 'service') return services.find((s) => String(s.id) === serviceId)?.name || 'Selected service';
-    return 'All branches';
-  })();
-
-  const topProvider = report?.byProvider[0];
-  const reviewProvider = report && report.byProvider.length > 1 ? report.byProvider[report.byProvider.length - 1] : null;
-  const topService = report?.byService[0];
-  const reviewService = report && report.byService.length > 1 ? report.byService[report.byService.length - 1] : null;
-
-  return (
-    <div>
-      <div className="flex items-start justify-between flex-wrap gap-3 mb-1 no-print">
-        <h1 className="font-display text-3xl">Reports</h1>
-        {report && (
-          <div className="flex gap-2">
-            <button
-              onClick={handleDownloadCsv}
-              className="rounded-lg border border-forest-300 text-forest-700 px-4 py-2 text-sm font-medium hover:bg-forest-50"
-            >
-              Download CSV
-            </button>
-            <button
-              onClick={() => window.print()}
-              className="rounded-lg border border-forest-300 text-forest-700 px-4 py-2 text-sm font-medium hover:bg-forest-50"
-            >
-              Print / save as PDF
-            </button>
-          </div>
-        )}
-      </div>
-      <p className="text-forest-500/70 text-sm mb-6 no-print">
-        Pick a period and, if you like, narrow it to one branch, one provider, or one service — then generate.
-      </p>
-
-      <div className="bg-white rounded-xl2 border border-forest-100 shadow-card p-5 mb-8 no-print space-y-4">
-        <div>
-          <label className="block text-xs font-medium text-forest-600 mb-1.5">Period</label>
-          <div className="flex flex-wrap gap-2">
-            {PRESETS.map((p) => (
-              <button
-                key={p.key}
-                onClick={() => setPreset(p.key)}
-                className={`rounded-lg border px-3 py-2 text-sm ${
-                  preset === p.key
-                    ? 'bg-forest-600 text-sand-50 border-forest-600'
-                    : 'bg-white text-forest-700 border-forest-200 hover:bg-forest-50'
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {preset === 'custom' && (
-          <div className="flex flex-wrap gap-3">
-            <div>
-              <label className="block text-xs font-medium text-forest-600 mb-1.5">From</label>
-              <input
-                type="date"
-                value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
-                className="rounded-lg border border-forest-200 px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-forest-600 mb-1.5">To</label>
-              <input
-                type="date"
-                value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
-                className="rounded-lg border border-forest-200 px-3 py-2 text-sm"
-              />
-            </div>
-          </div>
-        )}
-
-        <div>
-          <label className="block text-xs font-medium text-forest-600 mb-1.5">Report for</label>
-          <div className="flex flex-wrap gap-2 mb-2.5">
-            {(['all', ...(allowBranchFilter ? ['branch'] as const : []), 'provider', 'service'] as Scope[]).map((s) => (
-              <button
-                key={s}
-                onClick={() => setScope(s)}
-                className={`rounded-lg border px-3 py-2 text-sm capitalize ${
-                  scope === s
-                    ? 'bg-forest-600 text-sand-50 border-forest-600'
-                    : 'bg-white text-forest-700 border-forest-200 hover:bg-forest-50'
-                }`}
-              >
-                {s === 'all' ? 'Everything' : s === 'branch' ? 'A branch' : s === 'provider' ? 'A provider' : 'A service'}
-              </button>
-            ))}
-          </div>
-
-          {scope === 'branch' && (
-            <select
-              value={branchId}
-              onChange={(e) => setBranchId(e.target.value)}
-              className="rounded-lg border border-forest-200 px-3 py-2 text-sm"
-            >
-              <option value="">Choose a branch…</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </select>
-          )}
-          {scope === 'provider' && (
-            <select
-              value={providerId}
-              onChange={(e) => setProviderId(e.target.value)}
-              className="rounded-lg border border-forest-200 px-3 py-2 text-sm"
-            >
-              <option value="">Choose a provider…</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          )}
-          {scope === 'service' && (
-            <select
-              value={serviceId}
-              onChange={(e) => setServiceId(e.target.value)}
-              className="rounded-lg border border-forest-200 px-3 py-2 text-sm"
-            >
-              <option value="">Choose a service…</option>
-              {services.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        <button
-          onClick={generate}
-          disabled={loading || (scope === 'branch' && !branchId) || (scope === 'provider' && !providerId) || (scope === 'service' && !serviceId)}
-          className="rounded-lg bg-forest-600 text-sand-50 px-5 py-2 text-sm font-medium hover:bg-forest-700 disabled:opacity-60"
-        >
-          {loading ? 'Generating…' : 'Generate report'}
-        </button>
-        {error && <p className="text-sm text-clay mt-1">{error}</p>}
-      </div>
-
-      {report && (
-        // This whole block IS the document — same markup renders on screen
-        // and in the print/PDF output, so there is no separate "preview"
-        // vs "print" version to keep in sync.
-        <div id="report-content" style={{ background: '#ffffff', color: '#152625' }} className="flex flex-col rounded-xl2 overflow-hidden border border-forest-100 shadow-card">
-          {/* Header — plain, no color fill, just like a letterhead */}
-          <div className="px-8 py-8" style={{ borderBottom: '2px solid #152625' }}>
-            <p className="text-xs uppercase tracking-[0.25em] mb-3" style={{ color: '#6b7a75' }}>
-              Serene Spa
-            </p>
-            <h1 className="font-display text-3xl md:text-4xl mb-1">Executive Performance Report</h1>
-            <p className="text-xs uppercase tracking-[0.2em] mb-6" style={{ color: '#6b7a75' }}>
-              Business Intelligence · Operations · Revenue · Performance
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-              <div>
-                <p className="text-xs uppercase tracking-wide mb-1" style={{ color: '#6b7a75' }}>Report period</p>
-                <p>
-                  {new Date(report.range.from).toLocaleDateString('en-GB', { dateStyle: 'long' })} –{' '}
-                  {new Date(report.range.to).toLocaleDateString('en-GB', { dateStyle: 'long' })}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide mb-1" style={{ color: '#6b7a75' }}>Scope</p>
-                <p>{scopeLabel}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide mb-1" style={{ color: '#6b7a75' }}>Generated by</p>
-                <p>
-                  {user?.name} ({user?.role}) ·{' '}
-                  {new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}
-                </p>
-              </div>
-            </div>
-            <p className="text-xs italic mt-6" style={{ color: '#6b7a75' }}>Confidential Management Report</p>
-          </div>
-
-          {/* KPI row — plain numbers with thin dividers, no color fill */}
-          <div className="px-8 py-6" style={{ borderBottom: '1px solid #d8d8d0' }}>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 md:divide-x md:divide-forest-100">
-              <div className="md:pr-6">
-                <p className="font-display text-2xl md:text-3xl">{money(report.totals.revenueCollected)} <span className="text-sm font-normal" style={{ color: '#6b7a75' }}>TZS</span></p>
-                <p className="text-xs uppercase tracking-wide mt-1" style={{ color: '#6b7a75' }}>Total revenue</p>
-              </div>
-              <div className="md:pl-6 md:pr-6">
-                <p className="font-display text-2xl md:text-3xl">{report.totals.bookingsCount}</p>
-                <p className="text-xs uppercase tracking-wide mt-1" style={{ color: '#6b7a75' }}>Bookings</p>
-              </div>
-              <div className="md:pl-6 md:pr-6">
-                <p className="font-display text-2xl md:text-3xl">{report.totals.completedCount}</p>
-                <p className="text-xs uppercase tracking-wide mt-1" style={{ color: '#6b7a75' }}>Completed</p>
-              </div>
-              <div className="md:pl-6">
-                <p className="font-display text-2xl md:text-3xl">{pct(report.totals.cancellationRate)}</p>
-                <p className="text-xs uppercase tracking-wide mt-1" style={{ color: '#6b7a75' }}>Cancellation rate</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="px-8 py-8">
-            {scope !== 'provider' && report.byProvider.length > 0 && (
-              <div className="mb-9">
-                <SectionHeading>Service Provider Performance</SectionHeading>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr style={{ background: '#f2f2ef' }}>
-                      <th className="text-left px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Provider</th>
-                      <th className="text-right px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Completed</th>
-                      <th className="text-right px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Revenue</th>
-                      <th className="text-left px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.byProvider.map((row, i) => {
-                      const s = statusLabel(i, report.byProvider.length);
-                      return (
-                        <tr key={row.providerId} style={{ borderBottom: '1px solid #eef4f1' }}>
-                          <td className="px-3 py-2.5 font-medium">{row.providerName}</td>
-                          <td className="px-3 py-2.5 text-right">{row.sessionsCompleted}</td>
-                          <td className="px-3 py-2.5 text-right whitespace-nowrap">{money(row.revenueCollected)} TZS</td>
-                          <td className="px-3 py-2.5"><Badge text={s.text} tone={s.tone} /></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                {topProvider && (
-                  <p className="text-xs mt-3" style={{ color: '#4a4a44' }}>
-                    <strong>Top performer:</strong> {topProvider.providerName} — highest revenue this period.
-                    {reviewProvider && reviewProvider !== topProvider && (
-                      <> &nbsp; <strong>Review:</strong> {reviewProvider.providerName} — furthest behind on revenue, worth a closer look.</>
-                    )}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {scope !== 'service' && report.byService.length > 0 && (
-              <div className="mb-9">
-                <SectionHeading>Service Performance</SectionHeading>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr style={{ background: '#f2f2ef' }}>
-                      <th className="text-left px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Service</th>
-                      <th className="text-right px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Bookings</th>
-                      <th className="text-right px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Revenue</th>
-                      <th className="text-left px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.byService.map((row, i) => {
-                      const s = statusLabel(i, report.byService.length);
-                      return (
-                        <tr key={row.serviceId} style={{ borderBottom: '1px solid #eef4f1' }}>
-                          <td className="px-3 py-2.5 font-medium">{row.serviceName}</td>
-                          <td className="px-3 py-2.5 text-right">{row.bookingsCount}</td>
-                          <td className="px-3 py-2.5 text-right whitespace-nowrap">{money(row.revenueCollected)} TZS</td>
-                          <td className="px-3 py-2.5"><Badge text={s.text} tone={s.tone} /></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                {topService && (
-                  <p className="text-xs mt-3" style={{ color: '#4a4a44' }}>
-                    <strong>Best service:</strong> {topService.serviceName}.
-                    {reviewService && reviewService !== topService && (
-                      <> &nbsp; <strong>Lowest performing:</strong> {reviewService.serviceName} — worth reviewing demand, pricing, or marketing.</>
-                    )}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {allowBranchFilter && scope === 'all' && report.byBranch.length > 0 && (
-              <div className="mb-9">
-                <SectionHeading>Branch Performance</SectionHeading>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr style={{ background: '#f2f2ef' }}>
-                      <th className="text-left px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Branch</th>
-                      <th className="text-right px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Revenue</th>
-                      <th className="text-right px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Completed</th>
-                      <th className="text-right px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Cancellation</th>
-                      <th className="text-left px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.byBranch.map((row, i) => {
-                      const s = statusLabel(i, report.byBranch.length);
-                      return (
-                        <tr key={row.branchName} style={{ borderBottom: '1px solid #eef4f1' }}>
-                          <td className="px-3 py-2.5 font-medium">{row.branchName}</td>
-                          <td className="px-3 py-2.5 text-right whitespace-nowrap">{money(row.revenueCollected)} TZS</td>
-                          <td className="px-3 py-2.5 text-right">{row.completedCount}</td>
-                          <td className="px-3 py-2.5 text-right">{pct(row.cancellationRate)}</td>
-                          <td className="px-3 py-2.5"><Badge text={s.text} tone={s.tone} /></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <div className="mb-9">
-              <SectionHeading>Operational Insights</SectionHeading>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr style={{ background: '#f2f2ef' }}>
-                    <th className="text-left px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Metric</th>
-                    <th className="text-left px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Result</th>
-                    <th className="text-left px-3 py-2.5 font-semibold uppercase text-xs tracking-wide" style={{ color: '#122f27' }}>Note</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr style={{ borderBottom: '1px solid #eef4f1' }}>
-                    <td className="px-3 py-2.5 font-medium">Peak hour</td>
-                    <td className="px-3 py-2.5">{report.peakHour || '—'}</td>
-                    <td className="px-3 py-2.5 text-forest-500/70">Most bookings started around this hour</td>
-                  </tr>
-                  <tr style={{ borderBottom: '1px solid #eef4f1' }}>
-                    <td className="px-3 py-2.5 font-medium">Quiet hour</td>
-                    <td className="px-3 py-2.5">{report.quietHour || '—'}</td>
-                    <td className="px-3 py-2.5 text-forest-500/70">Consider a promotion around this time</td>
-                  </tr>
-                  <tr style={{ borderBottom: '1px solid #eef4f1' }}>
-                    <td className="px-3 py-2.5 font-medium">No-shows</td>
-                    <td className="px-3 py-2.5">{pct(report.totals.noShowRate)}</td>
-                    <td className="px-3 py-2.5 text-forest-500/70">{report.totals.noShowCount} reported this period</td>
-                  </tr>
-                  <tr style={{ borderBottom: '1px solid #eef4f1' }}>
-                    <td className="px-3 py-2.5 font-medium">Cancelled</td>
-                    <td className="px-3 py-2.5">{report.totals.cancelledCount}</td>
-                    <td className="px-3 py-2.5 text-forest-500/70">{pct(report.totals.cancellationRate)} of all bookings</td>
-                  </tr>
-                  <tr style={{ borderBottom: '1px solid #eef4f1' }}>
-                    <td className="px-3 py-2.5 font-medium">Outstanding balance</td>
-                    <td className="px-3 py-2.5">{money(report.totals.revenueOutstanding)} TZS</td>
-                    <td className="px-3 py-2.5 text-forest-500/70">Expected but not yet collected</td>
-                  </tr>
-                  <tr>
-                    <td className="px-3 py-2.5 font-medium">In progress</td>
-                    <td className="px-3 py-2.5">{report.totals.activeOrPendingCount}</td>
-                    <td className="px-3 py-2.5 text-forest-500/70">Still pending, active, or awaiting payment</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Footer — mt-auto pins this to the bottom of the page even when
-              the report is short, instead of floating right after content. */}
-          <div
-            className="mt-auto px-8 py-4 text-center text-xs uppercase tracking-[0.2em]"
-            style={{ color: '#6b7a75', borderTop: '1px solid #d8d8d0' }}
-          >
-            Confidential · Management Use · Serene Spa Performance Report
-          </div>
-        </div>
-      )}
-
-      {!report && !loading && (
-        <p className="text-forest-500/60 text-sm no-print">Choose a period and scope above, then generate the report.</p>
-      )}
-    </div>
-  );
+  function exportBookings(){if(!result)return;downloadCsv(`spa-bookings-${result.data.range.from.slice(0,10)}.csv`,[
+    {label:'Booking ID',value:(r:ManagementBooking)=>r.id},{label:'Date (EAT)',value:(r:ManagementBooking)=>stamp(r.created_at)},{label:'Customer',value:(r:ManagementBooking)=>r.customer_name},{label:'Phone',value:(r:ManagementBooking)=>r.customer_phone},{label:'Branch',value:(r:ManagementBooking)=>r.branch_name},{label:'Service',value:(r:ManagementBooking)=>r.service_name},{label:'Extra services',value:(r:ManagementBooking)=>r.extra_services},{label:'Room',value:(r:ManagementBooking)=>r.room_name},{label:'Provider',value:(r:ManagementBooking)=>r.provider_name},{label:'Status',value:(r:ManagementBooking)=>r.status},{label:'Value (TZS)',value:(r:ManagementBooking)=>r.amount_due},{label:'Paid to date (TZS)',value:(r:ManagementBooking)=>r.amount_paid},{label:'Outstanding (TZS)',value:(r:ManagementBooking)=>r.status==='cancelled'?0:Math.max(0,Number(r.amount_due)-Number(r.amount_paid))}],result.data.bookings);}
+  function exportPayments(){if(!result)return;downloadCsv(`spa-payments-${result.data.range.from.slice(0,10)}.csv`,[
+    {label:'Payment ID',value:(r:ManagementPayment)=>r.id},{label:'Booking ID',value:(r:ManagementPayment)=>r.booking_id},{label:'Received (EAT)',value:(r:ManagementPayment)=>stamp(r.created_at)},{label:'Customer',value:(r:ManagementPayment)=>r.customer_name},{label:'Branch',value:(r:ManagementPayment)=>r.branch_name},{label:'Method',value:(r:ManagementPayment)=>r.method},{label:'Amount (TZS)',value:(r:ManagementPayment)=>r.amount},{label:'Recorded by',value:(r:ManagementPayment)=>r.recorded_by_name}],result.data.payments);}
+  const r=result?.data;
+  const outstanding=r?.bookings.filter(b=>b.status!=='cancelled'&&Number(b.amount_due)>Number(b.amount_paid))||[];
+  const input='w-full rounded-lg border border-forest-200 bg-white px-3 py-2.5 text-sm';
+  return <div className="space-y-6 pb-8">
+    <div className="no-print"><p className="text-[10px] uppercase tracking-[0.22em] text-forest-500 font-semibold mb-2">Serene Spa · Reporting</p><h1 className="font-display text-4xl">{allowBranchFilter?'Management reports':'Branch reports'}</h1><p className="text-sm text-forest-500 mt-2">A clear record of business performance, collections, and follow-up actions.</p></div>
+    <form onSubmit={e=>{e.preventDefault();generate();}} className="no-print rounded-2xl border border-forest-100 bg-white p-5 sm:p-6 space-y-5">
+      <div className="flex justify-between gap-3"><h2 className="font-semibold text-sm">Prepare your report</h2><span className="text-xs text-forest-500">All times in EAT · Currency TZS</span></div>
+      <fieldset disabled={loading} className="space-y-5"><div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4"><label className="text-xs font-medium text-forest-600 space-y-2"><span className="block">Reporting period</span><select value={preset} onChange={e=>setPreset(e.target.value)} className={input}><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option><option value="year">This year</option><option value="custom">Custom dates</option></select></label>{allowBranchFilter?<label className="text-xs font-medium text-forest-600 space-y-2"><span className="block">Branch</span><select value={branch} onChange={e=>{setBranch(e.target.value);setProvider('');}} className={input}><option value="">All branches</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>:<div className="text-xs text-forest-600"><span className="block mb-2">Branch</span><p className="rounded-lg bg-forest-50 px-3 py-3 text-sm">{user?.branch_name||'Your assigned branch'}</p></div>}<label className="text-xs font-medium text-forest-600 space-y-2"><span className="block">Provider</span><select value={provider} onChange={e=>setProvider(e.target.value)} className={input}><option value="">All providers</option>{providers.filter(p=>!branch||String(p.branch_id)===branch).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label className="text-xs font-medium text-forest-600 space-y-2"><span className="block">Service</span><select value={service} onChange={e=>setService(e.target.value)} className={input}><option value="">All services</option>{services.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label></div>
+      {preset==='custom'&&<div className="flex flex-wrap gap-4"><label className="text-xs">From<input required type="date" value={from} max={to} onChange={e=>setFrom(e.target.value)} className={input}/></label><label className="text-xs">To<input required type="date" value={to} min={from} max={localDate()} onChange={e=>setTo(e.target.value)} className={input}/></label></div>}
+      <div className="flex flex-wrap gap-x-6 gap-y-3 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={includeBookings} onChange={e=>setIncludeBookings(e.target.checked)}/>Include booking register</label><label className="flex items-center gap-2"><input type="checkbox" checked={includePayments} onChange={e=>setIncludePayments(e.target.checked)}/>Include payment register</label></div>
+      <details><summary className="cursor-pointer text-xs text-forest-600">Add report notes (optional)</summary><textarea aria-label="Report notes" value={notes} onChange={e=>setNotes(e.target.value)} maxLength={3000} rows={3} className={`${input} mt-3`} placeholder="Handover notes, explanations, or actions for review"/></details>
+      <button type="submit" disabled={loading} className="rounded-lg bg-forest-700 text-white px-5 py-2.5 text-sm font-medium disabled:opacity-50">{loading?'Preparing report…':'Generate report'}</button></fieldset>{error&&<p role="alert" className="text-sm text-clay">{error}</p>}
+    </form>
+    {loading&&<p role="status" className="no-print text-sm text-forest-500">Preparing a consistent snapshot of your records…</p>}
+    {result&&r&&<><div className="no-print flex flex-wrap justify-between gap-3 items-center"><div><p className="text-sm font-semibold">Report preview</p><p className="text-xs text-forest-500 mt-1">Prepared {stamp(r.generatedAt)} EAT. Generate again to apply changed filters.</p></div><div className="flex flex-wrap gap-2"><button disabled={loading} onClick={exportBookings} className="rounded-lg border border-forest-200 px-3 py-2 text-xs bg-white">Bookings CSV</button><button disabled={loading} onClick={exportPayments} className="rounded-lg border border-forest-200 px-3 py-2 text-xs bg-white">Payments CSV</button><button disabled={loading} onClick={()=>window.print()} className="rounded-lg bg-forest-700 text-white px-4 py-2 text-xs font-semibold">Print / save PDF</button></div></div>
+      <article id="report-content" className="professional-report">
+        <header className="report-masthead"><div className="report-brand">SERENE SPA<span>REPORTS & RECORDS</span></div><p className="report-kicker">{allowBranchFilter?'Management review':'Branch operations'}</p><h1>{allowBranchFilter?'Business performance report':'Collections & operations report'}</h1><p className="report-subtitle">{date(r.range.from)} – {date(new Date(Date.parse(r.range.to)-1).toISOString())}</p><div className="report-metadata"><div><small>Reporting scope</small><strong>{r.scope.branchName}</strong><span>{result.provider} · {result.service}</span></div><div><small>Prepared by</small><strong>{result.preparedBy}</strong><span>{stamp(r.generatedAt)} EAT</span></div><div><small>Report reference</small><strong>SR-{r.generatedAt.replace(/\D/g,'').slice(0,14)}</strong><span>Internal business use · TZS</span></div></div></header>
+        <div className="report-body">
+          <Section index="01" title="Executive summary" note="A concise view of the selected reporting period.">
+            <div className="report-metrics">{[['Collections',money(r.totals.collected),'Payments received · TZS'],['Bookings',r.totals.bookings,`${r.totals.completed} completed`],['Booking value',money(r.totals.bookingValue),'Non-cancelled bookings · TZS'],['Outstanding',money(r.totals.outstanding),'Current unpaid balance · TZS']].map(([label,value,note])=><div key={label}><small>{label}</small><strong>{value}</strong><span>{note}</span></div>)}</div>
+            <p className="report-summary">The selected scope recorded <strong>{r.totals.bookings} bookings</strong> and received <strong>{money(r.totals.collected)} TZS</strong> across {r.totals.paymentCount} payments. {r.totals.completed} bookings are completed, {r.totals.cancelled} cancelled, and {r.totals.inProgress} remain pending, active, on hold, or awaiting payment.</p>
+            <Table headers={['Measure','This period','Previous period','Change']}><tr><td>Collections (TZS)</td><td className="numeric">{money(r.totals.collected)}</td><td className="numeric">{money(r.previous.collected)}</td><td>{change(r.totals.collected,r.previous.collected)}</td></tr><tr><td>Bookings</td><td className="numeric">{r.totals.bookings}</td><td className="numeric">{r.previous.bookings}</td><td>{change(r.totals.bookings,r.previous.bookings)}</td></tr><tr><td>Completed bookings</td><td className="numeric">{r.totals.completed}</td><td className="numeric">{r.previous.completed}</td><td>{change(r.totals.completed,r.previous.completed)}</td></tr></Table><p className="report-footnote">Comparison: {stamp(r.range.previousFrom)} to {stamp(r.range.previousTo)} EAT, the preceding equal-length period. Today may be incomplete.</p>
+          </Section>
+          <Section index="02" title="Collections & daily activity" note="Collections follow payment receipt dates, including payments for older bookings.">
+            <Table headers={['Payment method','Transactions','Collected (TZS)','Share']} >{r.methods.length?r.methods.map(m=><tr key={m.name}><td className="capitalize">{status(m.name)}</td><td className="numeric">{m.transactions}</td><td className="numeric">{money(m.collected)}</td><td className="numeric">{r.totals.collected?(m.collected/r.totals.collected*100).toFixed(1):'0'}%</td></tr>):<None cols={4}/>}<tr className="report-total"><td>Total collections</td><td className="numeric">{r.totals.paymentCount}</td><td className="numeric">{money(r.totals.collected)}</td><td/></tr></Table>
+            <h3 className="report-subheading">Daily activity</h3><Table headers={['Date','Bookings','Payments','Collected (TZS)']} >{r.days.filter(d=>d.bookings||d.transactions).length?r.days.filter(d=>d.bookings||d.transactions).map(d=><tr key={d.name}><td>{date(d.name)}</td><td className="numeric">{d.bookings}</td><td className="numeric">{d.transactions}</td><td className="numeric">{money(d.collected)}</td></tr>):<None cols={4}/>}</Table><p className="report-footnote">Dates with no bookings or payments are omitted. Figures are recorded activity, not a physical cash-count reconciliation.</p>
+          </Section>
+          <Section index="03" title="Service & team performance" note="Ranked by collections. Revenue is attributed to the booking’s primary service and provider.">
+            {allowBranchFilter&&!r.scope.branchId&&<><h3 className="report-subheading">Branch contribution</h3><Performance rows={r.branches} label="Branch"/></>}
+            <h3 className="report-subheading">Services</h3><Performance rows={r.services} label="Service"/>
+            <h3 className="report-subheading">Providers</h3><Performance rows={r.providers} label="Provider"/>
+          </Section>
+          <Section index="04" title="Exceptions & follow-up" note="Outstanding amounts are current balances on non-cancelled bookings created in this period.">
+            <div className="report-callouts"><p><strong>{r.totals.cancelled}</strong> cancellations</p><p><strong>{r.totals.noShows}</strong> reported no-shows</p><p><strong>{outstanding.length}</strong> bookings with a balance</p></div>
+            <Table headers={['Booking / customer','Service','Branch / room','Outstanding (TZS)']} >{outstanding.length?outstanding.map(b=><tr key={b.id}><td><strong>#{b.id}</strong> {b.customer_name}</td><td>{b.service_name}</td><td>{b.branch_name} / {b.room_name}</td><td className="numeric">{money(Math.max(0,Number(b.amount_due)-Number(b.amount_paid)))}</td></tr>):<None cols={4}/>}<tr className="report-total"><td colSpan={3}>Outstanding total</td><td className="numeric">{money(r.totals.outstanding)}</td></tr></Table>
+          </Section>
+          {result.bookings&&<Section index="A" title="Booking register" note="Bookings created during the selected period. Paid amounts include all payments to date."><Table headers={['Booking / date','Customer / service','Branch / room','Provider / status','Value','Paid','Balance']} >{r.bookings.length?r.bookings.map(b=><tr key={b.id}><td>#{b.id}<small>{stamp(b.created_at)}</small></td><td>{b.customer_name}<small>{b.service_name}{b.extra_services?` + ${b.extra_services}`:''}</small></td><td>{b.branch_name}<small>{b.room_name}</small></td><td>{b.provider_name}<small className="capitalize">{status(b.status)}</small></td><td className="numeric">{money(Number(b.amount_due))}</td><td className="numeric">{money(Number(b.amount_paid))}</td><td className="numeric">{b.status==='cancelled'?'—':money(Math.max(0,Number(b.amount_due)-Number(b.amount_paid)))}</td></tr>):<None cols={7}/>}</Table></Section>}
+          {result.payments&&<Section index="B" title="Payment register" note="Every payment received during the selected period. All amounts are in TZS."><Table headers={['Payment / received','Booking / customer','Branch','Method','Recorded by','Amount']} >{r.payments.length?r.payments.map(p=><tr key={p.id}><td>#{p.id}<small>{stamp(p.created_at)}</small></td><td>#{p.booking_id} {p.customer_name}</td><td>{p.branch_name}</td><td className="capitalize">{status(p.method)}</td><td>{p.recorded_by_name||'—'}</td><td className="numeric">{money(Number(p.amount))}</td></tr>):<None cols={6}/>}<tr className="report-total"><td colSpan={5}>Total collections</td><td className="numeric">{money(r.totals.collected)}</td></tr></Table></Section>}
+          <section className="report-closing"><h2>Notes & review</h2>{result.notes&&<p className="whitespace-pre-wrap">{result.notes}</p>}<p className="report-footnote">Amounts are in Tanzanian shillings (TZS); dates use East Africa Time (UTC+3). Booking value excludes cancellations. Collections and booking value use different date bases and should not be subtracted to derive debt. Statuses and balances reflect the time this report was generated. This operational report does not calculate profit, tax liability, or expenses.</p><div className="report-signoff"><div>Prepared by<strong>{result.preparedBy}</strong></div><div>Reviewed by<span>________________________</span></div><div>Review date<span>________________________</span></div></div></section>
+        </div><footer className="report-footer">Serene Spa · {r.scope.branchName} · Confidential business report</footer>
+      </article>
+    </>}
+    {!result&&!loading&&<div className="no-print rounded-2xl border border-dashed border-forest-200 p-10 text-center"><h2 className="font-display text-2xl">Ready when you are.</h2><p className="text-sm text-forest-500 mt-2">Choose your period and filters, then generate a report ready to review, print, or share.</p></div>}
+  </div>;
 }

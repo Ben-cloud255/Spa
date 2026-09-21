@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, FormEvent } from 'react';
+import { useEffect, useRef, useState, FormEvent } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { usePaymentMethods } from '@/lib/usePaymentMethods';
 import { groupServicesByCategory } from '@/lib/services';
@@ -47,11 +47,32 @@ export default function NewBookingModal({
   // Default to the room's usual provider if they're free right now; otherwise
   // fall back to whichever free provider comes first. The receptionist can
   // always override this — providers aren't stuck to one room.
+  //
+  // `providers` is refetched/polled by the parent, so it arrives as a new
+  // array reference on nearly every render even when nothing changed. We
+  // only want to pick a fresh default when the ROOM actually changes; on any
+  // other re-run (just a providers refresh) we should leave the
+  // receptionist's manual choice alone, and only step in if their chosen
+  // provider stopped being free.
+  const prevRoomIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (freeProviders.length === 0) {
       setProviderId('');
       return;
     }
+    const roomChanged = prevRoomIdRef.current !== roomId;
+    prevRoomIdRef.current = roomId;
+
+    if (!roomChanged) {
+      // Providers list just refreshed — keep the current selection unless
+      // it's no longer valid (that provider got busy/removed).
+      setProviderId((current) => {
+        if (current && freeProviders.some((p) => String(p.id) === current)) return current;
+        return String(freeProviders[0].id);
+      });
+      return;
+    }
+
     const roomsUsual = selectedRoom?.provider?.id;
     const usualIsFree = roomsUsual && freeProviders.some((p) => p.id === roomsUsual);
     setProviderId(String(usualIsFree ? roomsUsual : freeProviders[0].id));

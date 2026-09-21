@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const db = require('../config/db');
 const { sendCredentialsEmail } = require('../utils/mailer');
+const { logAudit } = require('../utils/auditLog');
 
 const USER_SELECT = `
   SELECT u.id, u.name, u.email, u.phone, u.role, u.branch_id, b.name AS branch_name,
@@ -78,6 +79,13 @@ async function createUser(req, res) {
     // hand over credentials for another way).
     sendCredentialsEmail({ to: email.trim().toLowerCase(), name: name.trim(), email: email.trim().toLowerCase(), password, role });
 
+    logAudit(req, {
+      action: 'Staff Account Created',
+      entityType: 'user',
+      entityLabel: `${name.trim()} (${role})`,
+      branchId: role === 'admin' ? null : branch_id,
+    });
+
     return res.status(201).json({ user: full.rows[0] });
   } catch (err) {
     console.error('Create user error:', err);
@@ -102,6 +110,16 @@ async function updateUser(req, res) {
       return res.status(404).json({ error: 'Account not found.' });
     }
     const full = await db.query(`${USER_SELECT} WHERE u.id = $1`, [id]);
+
+    if (is_active !== undefined) {
+      logAudit(req, {
+        action: is_active ? 'Staff Account Reactivated' : 'Staff Account Deactivated',
+        entityType: 'user',
+        entityLabel: full.rows[0].name,
+        branchId: full.rows[0].branch_id,
+      });
+    }
+
     return res.json({ user: full.rows[0] });
   } catch (err) {
     console.error('Update user error:', err);

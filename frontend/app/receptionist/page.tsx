@@ -9,6 +9,7 @@ import PaymentModal from '@/components/PaymentModal';
 import PaymentRequestModal from '@/components/PaymentRequestModal';
 import type { Booking } from '@/lib/types';
 import OnHoldList from '@/components/OnHoldList';
+import RoomInventoryPanel from '@/components/RoomInventoryPanel';
 import type { Room, Service, User } from '@/lib/types';
 
 function money(n: number) {
@@ -25,6 +26,7 @@ export default function ReceptionistDashboard() {
   const [paymentBooking, setPaymentBooking] = useState<Booking | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [holdRefreshKey, setHoldRefreshKey] = useState(0);
 
   async function loadProviders() {
     const data = await api.get<{ users: User[] }>('/users?role=provider');
@@ -65,6 +67,7 @@ export default function ReceptionistDashboard() {
       await api.post(`/bookings/${bookingId}/hold`);
       refresh();
       loadPaymentRequests();
+      setHoldRefreshKey((k) => k + 1);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not put this booking on hold.');
     } finally {
@@ -140,7 +143,7 @@ export default function ReceptionistDashboard() {
         </div>
       )}
 
-      <OnHoldList />
+      <OnHoldList refreshTrigger={holdRefreshKey} />
 
       {error && <p className="mb-4 text-sm text-clay bg-clay/10 rounded-lg px-3 py-2 inline-block">{error}</p>}
 
@@ -170,6 +173,9 @@ export default function ReceptionistDashboard() {
                   </button>
                 )}
               </div>
+              {room.branch && (
+                <RoomInventoryPanel roomId={room.id} roomName={room.name} branchId={room.branch.id} role="receptionist" />
+              )}
               </RoomCard>
             </div>
           ))}

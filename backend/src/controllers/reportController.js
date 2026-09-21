@@ -200,7 +200,7 @@ async function getDetail(req, res) {
   }
 }
 
-module.exports = { getSummary, getDetail, getExecutive };
+module.exports = { getSummary, getDetail, getExecutive, getAnalytics };
 
 /**
  * Builds a WHERE-clause fragment + matching params for optional branch/
@@ -395,4 +395,9 @@ async function getExecutive(req, res) {
     console.error('Executive report error:', err);
     return res.status(500).json({ error: 'Could not generate the executive report.' });
   }
+}
+
+// Keep the analytics route separate from the existing printable reports.
+async function getAnalytics(req, res) {
+  return require('./analyticsController').getAnalytics(req, res);
 }

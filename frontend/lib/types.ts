@@ -237,3 +237,90 @@ export interface ExecutiveReport {
   peakHour: string | null;
   quietHour: string | null;
 }
+
+export interface InventoryItem {
+  available_quantity: number;
+  id: number;
+  name: string;
+  unit: string;
+  minimum_stock: number;
+  cost_per_unit: number | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface InventoryBranchStock {
+  id: number;
+  item_id: number;
+  item_name: string;
+  unit: string;
+  minimum_stock: number;
+  cost_per_unit: number | null;
+  branch_id: number;
+  branch_name: string;
+  quantity: number;
+}
+
+export interface InventoryDistribution {
+  id: number;
+  item_id: number;
+  item_name: string;
+  unit: string;
+  branch_id: number;
+  branch_name: string;
+  quantity: number;
+  note: string | null;
+  recorded_by: number | null;
+  recorded_by_name: string | null;
+  created_at: string;
+}
+
+export interface InventoryRoomAllocation {
+  id: number;
+  item_id: number;
+  item_name: string;
+  unit: string;
+  branch_id: number;
+  branch_name: string;
+  room_id: number;
+  room_name: string;
+  quantity: number;
+  note: string | null;
+  status: 'in_use' | 'completed';
+  assigned_by: number | null;
+  assigned_by_name: string | null;
+  assigned_at: string;
+  completed_by: number | null;
+  completed_by_name: string | null;
+  completed_at: string | null;
+  completion_note: string | null;
+  quantity_returned: number;
+}
+
+export interface AuditLogEntry {
+  id: number;
+  actor_name: string;
+  actor_role: string;
+  action: string;
+  entity_type: string;
+  entity_label: string;
+  branch_name: string | null;
+  created_at: string;
+}
+
+export interface AnalyticsReport {
+  range: { from: string; to: string };
+  averageBookingValue: number;
+  repeatRate: number;
+  cancellationRate: number;
+  roomDayUtilization: number;
+  revenueTrend: 'up' | 'down' | 'flat';
+  bookingsTrend: 'up' | 'down' | 'flat';
+  byService: {
+    serviceId: number;
+    serviceName: string;
+    bookingsCount: number;
+    revenueCollected: number;
+    trend: 'up' | 'down' | 'flat';
+  }[];
+}

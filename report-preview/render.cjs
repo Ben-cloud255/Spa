@@ -1,0 +1,11 @@
+const fs=require('fs'),vm=require('vm');require('../backend/node_modules/dotenv').config({path:'../backend/.env'});
+const React=require('../frontend/node_modules/react'),server=require('../frontend/node_modules/react-dom/server'),ts=require('../frontend/node_modules/typescript');
+const {getManagement}=require('../backend/src/controllers/managementReportController'),{pool}=require('../backend/src/config/db');
+(async()=>{for(const role of ['admin','receptionist']){let data;await getManagement({user:{role,branchId:1},query:{from:'2026-09-01T00:00:00+03:00',to:new Date().toISOString()}},{status(c){throw Error('Report response '+c)},json(d){data=d}});let state=0;const result={data,provider:'All providers',service:'All services',notes:'',bookings:true,payments:true,preparedBy:'Report verification'};
+const sandbox={module:{exports:{}},exports:{},require:name=>name==='react'?{...React,useEffect(){},useState(value){state++;return [state===15?result:typeof value==='function'?value():value,()=>{}]}}:name==='react/jsx-runtime'?require('../frontend/node_modules/react/jsx-runtime'):name==='@/context/AuthContext'?{useAuth:()=>({user:{name:'Report verification',role,branch_name:'Dar es Salaam'}})}:name==='@/lib/api'?{api:{}}:{downloadCsv(){}},Date,Intl};sandbox.exports=sandbox.module.exports;
+const source=ts.transpileModule(fs.readFileSync('../frontend/components/ExecutiveReportView.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2021}}).outputText;vm.runInNewContext(source,sandbox);
+const html=server.renderToStaticMarkup(React.createElement(sandbox.module.exports.default,{allowBranchFilter:role==='admin'}));
+let css=fs.readFileSync('../frontend/.next/static/css/app/layout.css','utf8')+'\n'+fs.readFileSync('../frontend/app/globals.css','utf8').split('/* Shared management')[1];
+css=css.replace('and branch report document. */','');
+fs.writeFileSync(role+'.html','<!DOCTYPE html><html><head><meta charset="utf-8"><style>'+css+'\nbody{margin:0;background:white}.no-print{display:none!important}#report-content{max-width:900px;margin:auto}</style></head><body>'+html+'</body></html>');console.log(role+': '+data.bookings.length+' bookings; '+data.payments.length+' payments; preview generated');
+}})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>pool.end());

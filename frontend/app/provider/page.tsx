@@ -6,6 +6,7 @@ import { useRooms } from '@/lib/useRooms';
 import { api, ApiError } from '@/lib/api';
 import RoomCard from '@/components/RoomCard';
 import ExtraServiceModal from '@/components/ExtraServiceModal';
+import RoomInventoryPanel from '@/components/RoomInventoryPanel';
 import type { Room, Service } from '@/lib/types';
 
 export default function ProviderDashboard() {
@@ -169,6 +170,9 @@ export default function ProviderDashboard() {
                       {busyId === booking.id ? 'Confirming…' : 'Confirm service ended'}
                     </button>
                   </div>
+                )}
+                {room.branch && (
+                  <RoomInventoryPanel roomId={room.id} roomName={room.name} branchId={room.branch.id} role="provider" />
                 )}
               </RoomCard>
               </div>

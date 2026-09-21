@@ -15,6 +15,7 @@ export interface NavItem {
   href: string;
   label: string;
   icon: ReactNode;
+  children?: NavItem[];
 }
 
 export default function DashboardShell({
@@ -28,6 +29,22 @@ export default function DashboardShell({
   const pathname = usePathname();
   const [navOpen, setNavOpen] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
+    const initial = new Set<string>();
+    for (const item of navItems) {
+      if (item.children?.some((c) => c.href === pathname)) initial.add(item.label);
+    }
+    return initial;
+  });
+
+  function toggleGroup(label: string) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
 
   useEffect(() => {
     const unlock = () => {
@@ -74,6 +91,76 @@ export default function DashboardShell({
 
         <nav className="flex-1 px-3 space-y-1 overflow-y-auto min-h-0">
           {navItems.map((item) => {
+            if (item.children) {
+              const isOpen = openGroups.has(item.label);
+              const groupHasActive = item.children.some((c) => c.href === pathname);
+              return (
+                <div key={item.label}>
+                  <button
+                    onClick={() => toggleGroup(item.label)}
+                    className="w-full relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm group hover:bg-forest-600/50 transition-colors"
+                  >
+                    <span
+                      className={`shrink-0 transition-transform duration-150 group-hover:scale-110 ${
+                        groupHasActive ? 'text-white opacity-100' : 'text-forest-100 opacity-90'
+                      }`}
+                    >
+                      {item.icon}
+                    </span>
+                    <span className={`flex-1 text-left ${groupHasActive ? 'text-white font-medium' : 'text-forest-100'}`}>
+                      {item.label}
+                    </span>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      className={`text-forest-200 shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-90' : ''}`}
+                    >
+                      <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  {isOpen && (
+                    <div className="ml-4 pl-2.5 border-l border-forest-600/60 mt-0.5 space-y-1">
+                      {item.children.map((child) => {
+                        const active = pathname === child.href;
+                        return (
+                          <Link
+                            key={child.href}
+                            href={child.href}
+                            className="relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm group"
+                          >
+                            {active && (
+                              <motion.div
+                                layoutId="nav-active-pill"
+                                className="absolute inset-0 bg-forest-600 rounded-lg shadow-sm"
+                                transition={{ type: 'spring', stiffness: 500, damping: 34 }}
+                              />
+                            )}
+                            {!active && (
+                              <span className="absolute inset-0 rounded-lg bg-forest-600/0 group-hover:bg-forest-600/50 transition-colors duration-150" />
+                            )}
+                            <span
+                              className={`relative z-10 shrink-0 transition-transform duration-150 group-hover:scale-110 ${
+                                active ? 'text-white opacity-100' : 'text-forest-100 opacity-90'
+                              }`}
+                            >
+                              {child.icon}
+                            </span>
+                            <span className={`relative z-10 ${active ? 'text-white font-medium' : 'text-forest-100'}`}>
+                              {child.label}
+                            </span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
             const active = pathname === item.href;
             return (
               <Link

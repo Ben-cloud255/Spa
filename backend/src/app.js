@@ -16,6 +16,8 @@ const pushRoutes = require('./routes/pushRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const paymentMethodRoutes = require('./routes/paymentMethodRoutes');
 const searchRoutes = require('./routes/searchRoutes');
+const inventoryRoutes = require('./routes/inventoryRoutes');
+const auditLogRoutes = require('./routes/auditLogRoutes');
 
 const app = express();
 
@@ -52,6 +54,8 @@ app.use('/api/push', pushRoutes);
 app.use('/api/service-categories', categoryRoutes);
 app.use('/api/payment-methods', paymentMethodRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/inventory', inventoryRoutes);
+app.use('/api/audit-log', auditLogRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found.' });

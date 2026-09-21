@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { logAudit } = require('../utils/auditLog');
 
 async function listBranches(req, res) {
   try {
@@ -59,6 +60,16 @@ async function updateBranch(req, res) {
       `UPDATE branches SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
       values
     );
+
+    if (is_active !== undefined) {
+      logAudit(req, {
+        action: is_active ? 'Branch Restored' : 'Branch Archived',
+        entityType: 'branch',
+        entityLabel: result.rows[0].name,
+        branchId: result.rows[0].id,
+      });
+    }
+
     return res.json({ branch: result.rows[0] });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'A branch with this name already exists.' });
