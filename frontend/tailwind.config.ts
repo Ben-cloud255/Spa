@@ -19,10 +19,10 @@ const config: Config = {
           900: '#0d2019',
         },
         sand: {
-          50: '#fdfcf9',
-          100: '#f7f3ea',
-          200: '#efe8d6',
-          300: '#e2d5b8',
+          50: '#fcfdfc',
+          100: '#f8faf8',
+          200: '#e8eeea',
+          300: '#dce6df',
         },
         honey: {
           400: '#d3ab5c',
@@ -83,3 +83,4 @@ const config: Config = {
 };
 
 export default config;
+

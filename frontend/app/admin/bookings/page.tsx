@@ -1,183 +1,77 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import BranchFilter from '@/components/BranchFilter';
-import type { Booking, User } from '@/lib/types';
+import type { Booking } from '@/lib/types';
 
-const STATUS_STYLE: Record<string, string> = {
-  pending: 'bg-honey-500/10 text-honey-600',
-  active: 'bg-forest-500/10 text-forest-700',
-  completed: 'bg-forest-100 text-forest-700',
-  cancelled: 'bg-clay/10 text-clay',
-  on_hold: 'bg-honey-500/10 text-honey-700',
-  awaiting_payment: 'bg-honey-500/10 text-honey-700',
-};
+const statuses: Record<string, string> = { pending: 'Pending', active: 'In service', completed: 'Completed', cancelled: 'Cancelled', on_hold: 'On hold', awaiting_payment: 'Awaiting payment' };
+const money = (value: number) => new Intl.NumberFormat('en-TZ').format(value);
+const date = (value: string | null) => value ? new Date(value).toLocaleString('en-GB', { timeZone: 'Africa/Dar_es_Salaam', dateStyle: 'medium', timeStyle: 'short' }) : '—';
+const balance = (visit: Booking) => visit.status === 'cancelled' ? 0 : Math.max(0, Number(visit.amount_due) - Number(visit.amount_paid));
+function day(offset = 0) { return new Date(Date.now() + 3 * 3600000 + offset * 86400000).toISOString().slice(0, 10); }
 
-const RECENT_DAYS = 20;
-
-function money(n: number) {
-  return new Intl.NumberFormat('en-TZ').format(n);
-}
-
-export default function AdminBookingsPage() {
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [providers, setProviders] = useState<User[]>([]);
+export default function CustomerVisitsPage() {
+  const [visits, setVisits] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [branchFilter, setBranchFilter] = useState('');
-  const [providerFilter, setProviderFilter] = useState('');
-  const [showAllHistory, setShowAllHistory] = useState(false);
-  const [sortBy, setSortBy] = useState<'date' | 'amount'>('date');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [error, setError] = useState('');
+  const [branch, setBranch] = useState('');
+  const [from, setFrom] = useState(() => day(-29));
+  const [to, setTo] = useState(() => day());
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [payment, setPayment] = useState('');
+  const [provider, setProvider] = useState('');
+  const [sort, setSort] = useState('newest');
+  const [page, setPage] = useState(1);
+  const [refresh, setRefresh] = useState(0);
+  const invalidRange = !!(from && to && from > to);
 
   useEffect(() => {
-    api.get<{ users: User[] }>('/users?role=provider').then((d) => setProviders(d.users));
-  }, []);
-
-  useEffect(() => {
+    let current = true;
+    if (invalidRange) { setLoading(false); return; }
     const params = new URLSearchParams();
-    if (statusFilter) params.set('status', statusFilter);
-    if (branchFilter) params.set('branchId', branchFilter);
-    if (!showAllHistory) {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - RECENT_DAYS);
-      params.set('from', cutoff.toISOString());
-    }
-    const query = params.toString() ? `?${params.toString()}` : '';
-    setLoading(true);
-    api.get<{ bookings: Booking[] }>(`/bookings${query}`).then((d) => {
-      setBookings(d.bookings);
-      setLoading(false);
-    });
-  }, [statusFilter, branchFilter, showAllHistory]);
+    if (branch) params.set('branchId', branch);
+    if (from) params.set('from', `${from}T00:00:00+03:00`);
+    if (to) params.set('to', `${to}T23:59:59.999+03:00`);
+    setLoading(true); setError('');
+    api.get<{ bookings: Booking[] }>(`/bookings?${params}`).then(data => { if (current) setVisits(data.bookings); }).catch(() => { if (current) setError('Could not load customer visits. Please try again.'); }).finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [branch, from, to, refresh, invalidRange]);
 
-  const displayedBookings = bookings
-    .filter((b) => !providerFilter || String(b.provider_id) === providerFilter)
-    .sort((a, b) => {
-      let cmp = 0;
-      if (sortBy === 'date') cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      else cmp = Number(a.amount_paid) - Number(b.amount_paid);
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
+  useEffect(() => { setPage(1); }, [branch, from, to, search, status, payment, provider, sort]);
+  const providers = Array.from(new Map(visits.map(v => [String(v.provider_id), v.provider_name])).entries());
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return visits.filter(v => (!status || v.status === status) && (!payment || v.payment_status === payment) && (!provider || String(v.provider_id) === provider) && (!query || `${v.customer_name} ${v.customer_phone} ${v.service_name} ${v.id}`.toLowerCase().includes(query))).sort((a, b) => sort === 'balance' ? balance(b) - balance(a) : sort === 'oldest' ? +new Date(a.created_at) - +new Date(b.created_at) : +new Date(b.created_at) - +new Date(a.created_at));
+  }, [visits, search, status, payment, provider, sort]);
+  const pages = Math.max(1, Math.ceil(filtered.length / 12));
+  const currentPage = Math.min(page, pages);
+  const visible = filtered.slice((currentPage - 1) * 12, currentPage * 12);
+  const unavailable = loading || !!error || invalidRange;
+  function reset() { setSearch(''); setStatus(''); setPayment(''); setProvider(''); setBranch(''); setFrom(day(-29)); setTo(day()); setSort('newest'); }
 
-  const totalCollected = displayedBookings.reduce((sum, b) => sum + Number(b.amount_paid), 0);
-  const totalOutstanding = displayedBookings.reduce(
-    (sum, b) => sum + (b.status === 'cancelled' ? 0 : Number(b.amount_due) - Number(b.amount_paid)),
-    0
-  );
-
-  return (
-    <div>
-      <div className="flex items-start justify-between mb-1 flex-wrap gap-3">
-        <h1 className="font-display text-3xl">Customers and services</h1>
-      </div>
-      <p className="text-forest-500/70 text-sm mb-4">
-        {money(totalCollected)} TZS collected · {money(totalOutstanding)} TZS outstanding
-        {!showAllHistory && ` · showing the last ${RECENT_DAYS} days`}
-      </p>
-
-      <div className="flex flex-wrap items-center gap-3 mb-6">
-        <BranchFilter value={branchFilter} onChange={setBranchFilter} />
-        <select
-          value={providerFilter}
-          onChange={(e) => setProviderFilter(e.target.value)}
-          className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
-        >
-          <option value="">All providers</option>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
-        >
-          <option value="">All statuses</option>
-          <option value="pending">Pending</option>
-          <option value="active">Active</option>
-          <option value="completed">Completed</option>
-          <option value="cancelled">Cancelled</option>
-          <option value="on_hold">On hold</option>
-        </select>
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-          className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
-        >
-          <option value="date">Sort by date</option>
-          <option value="amount">Sort by amount paid</option>
-        </select>
-        <button
-          onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
-          className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white hover:bg-forest-50"
-        >
-          {sortDir === 'asc' ? 'Ascending ↑' : 'Descending ↓'}
-        </button>
-        <label className="flex items-center gap-2 text-sm text-forest-600 ml-auto">
-          <input type="checkbox" checked={showAllHistory} onChange={(e) => setShowAllHistory(e.target.checked)} />
-          Show full history
-        </label>
-      </div>
-
-      {loading ? (
-        <p className="text-forest-500/70">Loading…</p>
-      ) : (
-        <div className="bg-white rounded-xl2 border border-forest-100 shadow-card overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-sand-100/70 text-forest-600 text-xs uppercase tracking-wide">
-              <tr>
-                <th className="text-left px-4 py-3">Customer</th>
-                <th className="text-left px-4 py-3">Branch</th>
-                <th className="text-left px-4 py-3">Service</th>
-                <th className="text-left px-4 py-3">Room</th>
-                <th className="text-left px-4 py-3">Provider</th>
-                <th className="text-left px-4 py-3">Receptionist</th>
-                <th className="text-left px-4 py-3">Status</th>
-                <th className="text-left px-4 py-3">Payment</th>
-                <th className="text-left px-4 py-3">Date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-forest-50">
-              {displayedBookings.map((b) => (
-                <tr key={b.id}>
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-ink">{b.customer_name}</p>
-                    <p className="text-xs text-forest-500/70">{b.customer_phone}</p>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-forest-600">{b.branch_name || '—'}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{b.service_name}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{b.room_name}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{b.provider_name}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{b.receptionist_name}</td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${STATUS_STYLE[b.status]}`}>
-                      {b.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    {money(b.amount_paid)} / {money(b.amount_due)}
-                    <span className="ml-1.5 text-xs text-forest-500/60 capitalize">({b.payment_status})</span>
-                  </td>
-                  <td className="px-4 py-3 text-forest-500/70 whitespace-nowrap">
-                    {new Date(b.created_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}
-                  </td>
-                </tr>
-              ))}
-              {displayedBookings.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-forest-500/60">
-                    No bookings match this filter.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
+  return <div className="visits-page">
+    <header className="visits-heading"><div><p className="visits-eyebrow">CUSTOMER ACTIVITY</p><h1 className="font-display text-3xl">Customer Visits</h1><p className="visits-subtitle">Follow every visit, from arrival and service to payment.</p></div><button className="visits-button" disabled={loading} onClick={() => setRefresh(n => n + 1)}>{loading ? 'Refreshing…' : '↻ Refresh'}</button></header>
+    <section className="visits-metrics" aria-label="Filtered visit summary">{[
+      ['Visits', filtered.length, 'Matching your filters'],
+      ['In service', filtered.filter(v => v.status === 'active').length, 'Currently active visits'],
+      ['Amount paid', money(filtered.reduce((sum, v) => sum + Number(v.amount_paid), 0)), 'TZS · paid toward these visits'],
+      ['Outstanding', money(filtered.reduce((sum, v) => sum + balance(v), 0)), 'TZS · excludes cancelled visits'],
+    ].map(([label, value, hint]) => <div className="visits-metric" key={label}><p>{label}</p><strong>{unavailable ? '—' : value}</strong><span>{hint}</span></div>)}</section>
+    <section className="visits-filters" aria-label="Filter customer visits">
+      <div className="visits-filter-top"><label className="visits-search">Search visits<input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Customer name, phone, service or visit number" /></label><label>From<input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label><label>To<input type="date" value={to} onChange={e => setTo(e.target.value)} /></label></div>
+      <div className="visits-filter-bottom"><BranchFilter value={branch} onChange={value => { setBranch(value); setProvider(''); }} /><select aria-label="Visit status" value={status} onChange={e => setStatus(e.target.value)}><option value="">All visit statuses</option>{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select aria-label="Payment status" value={payment} onChange={e => setPayment(e.target.value)}><option value="">All payments</option><option value="paid">Paid</option><option value="partial">Partially paid</option><option value="unpaid">Unpaid</option></select><select aria-label="Provider" value={provider} onChange={e => setProvider(e.target.value)}><option value="">All providers in these visits</option>{providers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select><button className="visits-text-button" onClick={() => { setFrom(''); setTo(''); }}>All dates</button><button className="visits-text-button" onClick={reset}>Reset filters</button></div>
+      <p className="visits-filter-note">Dates refer to when the visit was recorded · East Africa Time. Summaries cover the matching visits, including payments recorded later.</p>
+    </section>
+    {invalidRange ? <p className="visits-error" role="alert">The end date must be on or after the start date.</p> : error ? <div className="visits-error" role="alert">{error} <button className="visits-text-button" onClick={() => setRefresh(n => n + 1)}>Retry</button></div> : loading ? <div className="visits-empty" role="status">Loading customer visits…</div> : <section className="visits-list" aria-label="Customer visits">
+      <div className="visits-list-heading"><div><h2>Visit records <span>{filtered.length}</span></h2><p>Select a visit to view staff, session times and payment details.</p></div><select aria-label="Sort visits" value={sort} onChange={e => setSort(e.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="balance">Highest outstanding</option></select></div>
+      {visits.length >= 500 && <p className="visits-limit" role="status">Showing the latest 500 records for this date range and branch. Narrow the dates to see a complete set; search, filters and totals apply to these loaded records.</p>}
+      {!filtered.length && <div className="visits-empty"><h3>No visits found</h3><p>Try another name, date range or filter.</p><button className="visits-text-button" onClick={reset}>Reset filters</button></div>}
+      {visible.map(v => <details key={v.id} className="visit-record"><summary><span className="visit-person"><span className="visit-avatar" aria-hidden="true">{v.customer_name.trim().slice(0, 1).toUpperCase()}</span><span><strong>{v.customer_name}</strong><small>Visit #{v.id} · {v.customer_phone || 'No phone recorded'}</small></span></span><span className="visit-service"><strong>{v.service_name}</strong><small>{v.branch_name || 'Unassigned branch'} · {date(v.created_at)}</small></span><span className={`visit-status visit-status-${v.status}`}>{statuses[v.status] || v.status}</span><span className="visit-payment"><strong>{money(Number(v.amount_paid))} <small>TZS paid</small></strong><small>{balance(v) > 0 ? `${money(balance(v))} TZS outstanding` : v.status === 'cancelled' ? 'Cancelled visit' : 'No outstanding balance'}</small></span><span className="visit-chevron" aria-hidden="true">⌄</span></summary>
+        <div className="visit-detail"><div><h3>Service & staff</h3><dl><dt>Service</dt><dd>{v.service_name}</dd><dt>Room</dt><dd>{v.room_name || '—'}</dd><dt>Provider</dt><dd>{v.provider_name || '—'}</dd><dt>Receptionist</dt><dd>{v.receptionist_name || '—'}</dd></dl></div><div><h3>Session timeline</h3><dl><dt>Recorded</dt><dd>{date(v.created_at)}</dd><dt>Started</dt><dd>{date(v.active_started_at)}</dd><dt>Expected end</dt><dd>{date(v.expected_end_at)}</dd><dt>Ended</dt><dd>{date(v.ended_at)}</dd><dt>Service duration</dt><dd>{v.duration_minutes} min{Number(v.extended_minutes) > 0 ? ` + ${v.extended_minutes} min extended` : ''}</dd></dl></div><div><h3>Payment summary</h3><dl><dt>Total charge</dt><dd>{money(Number(v.amount_due))} TZS</dd><dt>Amount paid</dt><dd>{money(Number(v.amount_paid))} TZS</dd><dt>Outstanding</dt><dd>{money(balance(v))} TZS</dd><dt>Payment status</dt><dd>{v.payment_status === 'partial' ? 'Partially paid' : v.payment_status === 'paid' ? 'Paid' : 'Unpaid'}</dd></dl>{v.status === 'cancelled' && <p className="visits-filter-note">Cancelled visits are excluded from outstanding totals.</p>}</div></div>
+      </details>)}
+      {filtered.length > 0 && <footer className="visits-pagination"><span>{(currentPage - 1) * 12 + 1}–{Math.min(currentPage * 12, filtered.length)} of {filtered.length} visits</span><div><button className="visits-button" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Previous</button><span>Page {currentPage} of {pages}</span><button className="visits-button" disabled={currentPage === pages} onClick={() => setPage(currentPage + 1)}>Next</button></div></footer>}
+    </section>}
+  </div>;
 }

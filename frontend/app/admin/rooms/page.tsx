@@ -1,14 +1,21 @@
 'use client';
 
-import { useEffect, useState, FormEvent } from 'react';
+import { useEffect, useState, useRef, FormEvent } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { useBranches } from '@/lib/useBranches';
+import RoomCard from '@/components/RoomCard';
 import StatusBadge from '@/components/StatusBadge';
 import BranchFilter from '@/components/BranchFilter';
 import type { Room, User } from '@/lib/types';
 
 export default function AdminRoomsPage() {
+  const [view, setView] = useState<'board' | 'manage'>('board');
+  const [search, setSearch] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const requestId = useRef(0);
   const { branches } = useBranches();
   const searchParams = useSearchParams();
   const focusId = searchParams.get('focus');
@@ -32,6 +39,8 @@ export default function AdminRoomsPage() {
   useEffect(() => {
     if (!focusId) return;
     setShowArchived(true);
+    setView('manage');
+    setSearch('');
     setFilterBranch('');
     setFilterProvider('');
     setFilterStatus('');
@@ -39,18 +48,24 @@ export default function AdminRoomsPage() {
   }, [focusId]);
 
   async function load() {
+    const request = ++requestId.current;
     setLoading(true);
+    setLoadError('');
     const params = new URLSearchParams();
     if (filterBranch) params.set('branchId', filterBranch);
     if (showArchived) params.set('includeArchived', 'true');
     const query = params.toString() ? `?${params.toString()}` : '';
+    try {
     const [roomsRes, usersRes] = await Promise.all([
       api.get<{ rooms: Room[] }>(`/rooms${query}`),
       api.get<{ users: User[] }>('/users?role=provider'),
     ]);
+    if (request !== requestId.current) return;
     setRooms(roomsRes.rooms);
     setProviders(usersRes.users);
-    setLoading(false);
+    } catch {
+      if (request === requestId.current) setLoadError('Could not load rooms. Please refresh to try again.');
+    } finally { if (request === requestId.current) setLoading(false); }
   }
 
   useEffect(() => {
@@ -65,6 +80,7 @@ export default function AdminRoomsPage() {
   const providersForNewBranch = providers.filter((p) => !newBranch || String(p.branch_id) === newBranch);
 
   const displayedRooms = rooms
+    .filter((r) => `${r.name} ${r.branch?.name || ''} ${r.currentBooking?.customerName || ''}`.toLowerCase().includes(search.trim().toLowerCase()))
     .filter((r) => !filterProvider || String(r.provider?.id || '') === filterProvider)
     .filter((r) => !filterStatus || r.status === filterStatus)
     .sort((a, b) => (sortDir === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
@@ -73,7 +89,7 @@ export default function AdminRoomsPage() {
   // checkbox never points at a room that's no longer on screen.
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [filterBranch, filterProvider, filterStatus, showArchived]);
+  }, [filterBranch, filterProvider, filterStatus, showArchived, search, view]);
 
   useEffect(() => {
     if (!focusId || loading) return;
@@ -101,19 +117,22 @@ export default function AdminRoomsPage() {
 
   async function createRoom(e: FormEvent) {
     e.preventDefault();
+    if (creating) return;
+    setCreating(true);
     setError(null);
     try {
       await api.post('/rooms', {
-        name: newName,
+        name: newName.trim(),
         provider_id: newProvider ? Number(newProvider) : null,
         branch_id: newBranch ? Number(newBranch) : null,
       });
+      setShowCreate(false);
       setNewName('');
       setNewProvider('');
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not create the room.');
-    }
+    } finally { setCreating(false); }
   }
 
   async function reassignProvider(roomId: number, providerId: string) {
@@ -226,14 +245,17 @@ export default function AdminRoomsPage() {
   const selectableCount = displayedRooms.filter((r) => !r.isArchived).length;
 
   return (
-    <div>
+    <div className="admin-room-page">
       <div className="flex items-start justify-between flex-wrap gap-3 mb-1">
-        <h1 className="font-display text-3xl">Rooms</h1>
+        <div><p className="visits-eyebrow">SPACE & STAFFING</p><h1 className="font-display text-3xl">Rooms</h1></div>
         <BranchFilter value={filterBranch} onChange={setFilterBranch} />
       </div>
-      <p className="text-forest-500/70 text-sm mb-8">Manage treatment rooms and which provider is assigned to each, across every branch.</p>
+      <p className="text-forest-500 text-sm mb-6">A clear view of room availability, current sessions and provider assignments.</p>
+      <div className="room-overview-stats">{[['Rooms in use', rooms.filter(r => !r.isArchived).length], ['Available', rooms.filter(r => !r.isArchived && r.status === 'inactive').length], ['In session', rooms.filter(r => !r.isArchived && r.status === 'active').length], ['Awaiting confirmation', rooms.filter(r => !r.isArchived && r.status === 'pending').length]].map(([label, value]) => <div key={label}><span>{label === 'Rooms in use' ? 'Total rooms' : label}</span><strong>{loading || loadError ? '—' : value}</strong><small>{label === 'Rooms in use' ? 'Excludes removed rooms' : 'Within the selected branch scope'}</small></div>)}</div>
+      <div className="room-view-toolbar"><div className="room-view-switch" aria-label="Room view"><button aria-pressed={view === 'board'} onClick={() => setView('board')}>Room board</button><button aria-pressed={view === 'manage'} onClick={() => setView('manage')}>Manage rooms</button></div><div className="flex gap-2"><button className="visits-button" disabled={loading} onClick={load}>{loading ? 'Refreshing…' : '↻ Refresh'}</button><button className="room-add-button" aria-expanded={showCreate} aria-controls="room-create-form" onClick={() => setShowCreate(!showCreate)}>{showCreate ? 'Close form' : '+ Add room'}</button></div></div>
 
-      <form onSubmit={createRoom} className="bg-white rounded-xl2 border border-forest-100 shadow-card p-5 flex flex-wrap items-end gap-3 mb-6">
+
+      {showCreate && <form id="room-create-form" onSubmit={createRoom} className="bg-white rounded-xl2 border border-forest-100 shadow-card p-5 flex flex-wrap items-end gap-3 mb-6">
         <div>
           <label className="block text-xs font-medium text-forest-600 mb-1.5">Branch</label>
           <select
@@ -277,18 +299,20 @@ export default function AdminRoomsPage() {
             ))}
           </select>
         </div>
-        <button type="submit" className="rounded-lg bg-forest-600 text-sand-50 px-4 py-2 text-sm font-medium hover:bg-forest-700">
-          Add room
+        <button type="submit" disabled={creating || !newName.trim() || !newBranch} className="rounded-lg bg-forest-600 text-sand-50 px-4 py-2 text-sm font-medium hover:bg-forest-700">
+          {creating ? 'Adding…' : 'Add room'}
         </button>
-      </form>
+      </form>}
 
-      <div className="flex flex-wrap items-center gap-3 mb-3">
+      <div className="room-filter-bar flex flex-wrap items-center gap-3 mb-3">
+        <input type="search" aria-label="Search rooms" placeholder="Search room, branch or customer" value={search} onChange={e => setSearch(e.target.value)} className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white" />
         <select
+          aria-label="Filter by default provider"
           value={filterProvider}
           onChange={(e) => setFilterProvider(e.target.value)}
           className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
         >
-          <option value="">All providers</option>
+          <option value="">All default providers</option>
           {providers.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -296,6 +320,7 @@ export default function AdminRoomsPage() {
           ))}
         </select>
         <select
+          aria-label="Filter by room status"
           value={filterStatus}
           onChange={(e) => setFilterStatus(e.target.value)}
           className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
@@ -315,10 +340,10 @@ export default function AdminRoomsPage() {
           <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
           Show removed rooms
         </label>
-        {error && <p className="text-sm text-clay basis-full">{error}</p>}
+        {error && <p role="alert" className="text-sm text-clay basis-full">{error}</p>}
       </div>
 
-      {selectedIds.size > 0 && (
+      {view === 'manage' && selectedIds.size > 0 && (
         <div className="flex flex-wrap items-center gap-3 mb-3 bg-forest-50 border border-forest-200 rounded-lg px-4 py-2.5">
           <p className="text-sm font-medium text-forest-700">
             {selectedIds.size} room{selectedIds.size === 1 ? '' : 's'} selected
@@ -346,8 +371,21 @@ export default function AdminRoomsPage() {
         </div>
       )}
 
-      {loading ? (
+      <p className="text-xs text-forest-500 mb-5">{view === 'board' ? 'Rooms are grouped by branch. Open session details for customer information and timing.' : 'Manage default providers and room availability. Removing a room preserves its visit history.'}</p>
+      {loadError ? <p role="alert" className="visits-error">{loadError} <button className="visits-text-button" onClick={load}>Retry</button></p> : loading ? (
         <p className="text-forest-500/70">Loading…</p>
+      ) : view === 'board' ? (
+        <div className="room-branch-board">
+          {Array.from(new Set(displayedRooms.map(r => r.branch?.id ?? 0))).map(branchId => {
+            const group = displayedRooms.filter(r => (r.branch?.id ?? 0) === branchId);
+            return <section className="room-branch-section" key={branchId}><header><h2>{group[0].branch?.name || 'Unassigned branch'}</h2><span>{group.length} rooms · {group.filter(r => !r.isArchived && r.status === 'inactive').length} available</span></header><div className="room-admin-grid">{group.map(room => <article className={`room-admin-card ${room.isArchived ? 'room-archived' : ''}`} key={room.id}>
+              <div className="room-admin-card-heading"><span className="room-door-icon" aria-hidden="true">▥</span><div><h3>{room.name}</h3><p>{room.isArchived ? 'Removed from service' : room.status === 'inactive' ? 'Ready for the next customer' : 'Room currently occupied'}</p></div>{room.isArchived ? <span className="text-xs text-clay">Removed</span> : <StatusBadge status={room.status} />}</div>
+              <dl className="room-card-staff"><dt>Default provider</dt><dd>{room.provider?.name || 'Not assigned'}</dd>{room.currentBooking && <><dt>Serving now</dt><dd>{room.currentBooking.provider?.name || 'Not assigned'}</dd></>}</dl>
+              {room.currentBooking ? <details className="room-session-detail"><summary>View session details <span aria-hidden="true">⌄</span></summary><div className="pt-3"><RoomCard room={room} /></div></details> : <p className="room-card-empty">{room.isArchived ? 'Restore this room from Manage rooms.' : 'No current session'}</p>}
+            </article>)}</div></section>;
+          })}
+          {displayedRooms.length === 0 && <div className="visits-empty">No rooms match these filters.</div>}
+        </div>
       ) : (
         <div className="bg-white rounded-xl2 border border-forest-100 shadow-card overflow-hidden">
           <div className="overflow-x-auto">
@@ -394,6 +432,7 @@ export default function AdminRoomsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <select
+                      aria-label={`Default provider for ${room.name}`}
                       value={room.provider?.id || ''}
                       disabled={savingId === room.id || room.status !== 'inactive' || room.isArchived}
                       onChange={(e) => reassignProvider(room.id, e.target.value)}

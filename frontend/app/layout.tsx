@@ -25,9 +25,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${display.variable} ${body.variable}`}>
-      <body className="font-body bg-sand-100 text-ink min-h-screen">
+      <body className="font-body text-ink min-h-screen">
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );
 }
+

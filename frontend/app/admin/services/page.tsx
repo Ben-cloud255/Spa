@@ -9,6 +9,10 @@ import type { Service, ServiceCategory } from '@/lib/types';
 const EMPTY_FORM = { name: '', duration_minutes: '', price: '', description: '', category_id: '', branch_id: '' };
 
 export default function AdminServicesPage() {
+  const [showServiceForm, setShowServiceForm] = useState(false);
+  const [search, setSearch] = useState('');
+  const [removingCategory, setRemovingCategory] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
   const { branches } = useBranches();
   const searchParams = useSearchParams();
   const focusId = searchParams.get('focus');
@@ -33,6 +37,8 @@ export default function AdminServicesPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   async function load(includeHidden: boolean) {
+    setLoading(true);
+    try {
     const query = includeHidden ? '?includeInactive=true' : '';
     const [servicesData, categoriesData] = await Promise.all([
       api.get<{ services: Service[] }>(`/services${query}`),
@@ -40,7 +46,8 @@ export default function AdminServicesPage() {
     ]);
     setServices(servicesData.services);
     setCategories(categoriesData.categories);
-    setLoading(false);
+    } catch { setError('Could not load the service catalog. Please refresh to try again.'); }
+    finally { setLoading(false); }
   }
 
   useEffect(() => {
@@ -55,6 +62,7 @@ export default function AdminServicesPage() {
     if (!focusId) return;
     setShowHidden(true);
     setFilterBranch('');
+    setSearch('');
     if (focusCategory) setOpenGroup(focusCategory);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, focusCategory]);
@@ -71,6 +79,8 @@ export default function AdminServicesPage() {
 
   async function createService(e: FormEvent) {
     e.preventDefault();
+    if (busy) return;
+    setBusy(true);
     setError(null);
     try {
       await api.post('/services', {
@@ -82,14 +92,17 @@ export default function AdminServicesPage() {
         branch_id: form.branch_id ? Number(form.branch_id) : null,
       });
       setForm(EMPTY_FORM);
+      setShowServiceForm(false);
       load(showHidden);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not create the service.');
-    }
+    } finally { setBusy(false); }
   }
 
   async function createCategory(e: FormEvent) {
     e.preventDefault();
+    if (busy) return;
+    setBusy(true);
     setError(null);
     try {
       await api.post('/service-categories', { name: newCategoryName });
@@ -98,33 +111,52 @@ export default function AdminServicesPage() {
       load(showHidden);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not create the category.');
-    }
+    } finally { setBusy(false); }
+  }
+
+  async function removeCategory(category: ServiceCategory) {
+    if (removingCategory !== null) return;
+    if (!window.confirm(`Remove the category "${category.name}"? Any services inside it will move to Other. Their availability, prices and visit history will stay unchanged.`)) return;
+    setRemovingCategory(category.id);
+    setError(null);
+    try {
+      await api.del(`/service-categories/${category.id}`);
+      if (openGroup === category.name) setOpenGroup(null);
+      setForm(previous => previous.category_id === String(category.id) ? { ...previous, category_id: '' } : previous);
+      await load(showHidden);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not remove the category.');
+    } finally { setRemovingCategory(null); }
   }
 
   async function toggleActive(service: Service) {
-    await api.patch(`/services/${service.id}`, { is_active: !service.is_active });
-    load(showHidden);
+    setError(null);
+    try { await api.patch(`/services/${service.id}`, { is_active: !service.is_active }); await load(showHidden); }
+    catch (err) { setError(err instanceof ApiError ? err.message : 'Could not update the service.'); }
   }
 
   async function updateServiceField(service: Service, field: 'category_id' | 'branch_id', value: string) {
-    await api.patch(`/services/${service.id}`, { [field]: value ? Number(value) : null });
-    load(showHidden);
+    setError(null);
+    try { await api.patch(`/services/${service.id}`, { [field]: value ? Number(value) : null }); await load(showHidden); }
+    catch (err) { setError(err instanceof ApiError ? err.message : 'Could not update the service.'); }
   }
 
   // Group everything by category name first — this is what powers both the
   // category-cards view and each category's own count.
   const allGrouped = new Map<string, Service[]>();
+  categories.forEach(category => allGrouped.set(category.name, []));
   for (const s of services) {
+    if (search.trim() && !`${s.name} ${s.category_name || 'Other'}`.toLowerCase().includes(search.trim().toLowerCase())) continue;
     const key = s.category_name || 'Other';
     if (!allGrouped.has(key)) allGrouped.set(key, []);
     allGrouped.get(key)!.push(s);
   }
-  const groupNames = [...allGrouped.keys()].sort((a, b) => (a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)));
+  const groupNames = [...allGrouped.keys()].filter(name => !search.trim() || allGrouped.get(name)!.length > 0 || name.toLowerCase().includes(search.trim().toLowerCase())).sort((a, b) => (a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)));
 
   // Services shown once a category card is opened — filtered + sorted.
   const openServices = openGroup
     ? (allGrouped.get(openGroup) || [])
-        .filter((s) => !filterBranch || String(s.branch_id || '') === filterBranch)
+        .filter((s) => !filterBranch || !s.branch_id || String(s.branch_id) === filterBranch)
         .sort((a, b) => {
           let cmp = 0;
           if (sortBy === 'name') cmp = a.name.localeCompare(b.name);
@@ -135,21 +167,23 @@ export default function AdminServicesPage() {
     : [];
 
   return (
-    <div>
+    <div className="service-catalog-page">
       <div className="flex items-start justify-between flex-wrap gap-3 mb-1">
-        <h1 className="font-display text-3xl">Services</h1>
+        <div><p className="visits-eyebrow">TREATMENT CATALOG</p><h1 className="font-display text-3xl">Services</h1></div>
+        <div className="flex gap-2"><button className="visits-button" aria-expanded={showServiceForm} aria-controls="service-create-form" onClick={() => setShowServiceForm(!showServiceForm)}>{showServiceForm ? 'Close form' : '+ Add service'}</button>
         <button
           onClick={() => setShowCategoryForm((v) => !v)}
           className="rounded-lg bg-forest-600 text-sand-50 px-4 py-2 text-sm font-medium hover:bg-forest-700"
         >
           {showCategoryForm ? 'Cancel' : '+ New category'}
-        </button>
+        </button></div>
       </div>
       <p className="text-forest-500/70 text-sm mb-6">
-        The treatment menu customers can be booked into, grouped by category so the list stays manageable as it
-        grows. Open a category to see and manage the services inside it.
+        Organize treatments, prices and duration. Open a category to manage its services and branch availability.
       </p>
 
+      <div className="service-catalog-summary"><span><strong>{services.filter(s => s.is_active).length}</strong> active services</span><span><strong>{categories.length}</strong> categories</span><span>Prices in TZS · Duration in minutes</span></div>
+      {error && <p role="alert" className="visits-error mb-4">{error}</p>}
       {showCategoryForm && (
         <form onSubmit={createCategory} className="bg-white rounded-xl2 border border-forest-100 shadow-card p-4 flex flex-wrap items-end gap-3 mb-6">
           <div>
@@ -162,13 +196,13 @@ export default function AdminServicesPage() {
               className="rounded-lg border border-forest-200 px-3 py-2 text-sm w-52"
             />
           </div>
-          <button type="submit" className="rounded-lg bg-forest-600 text-sand-50 px-4 py-2 text-sm font-medium hover:bg-forest-700">
+          <button type="submit" disabled={busy} className="rounded-lg bg-forest-600 text-sand-50 px-4 py-2 text-sm font-medium hover:bg-forest-700">
             Add category
           </button>
         </form>
       )}
 
-      <form onSubmit={createService} className="bg-white rounded-xl2 border border-forest-100 shadow-card p-5 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6 items-end">
+      {showServiceForm && <form id="service-create-form" onSubmit={createService} className="bg-white rounded-xl2 border border-forest-100 shadow-card p-5 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6 items-end">
         <div className="sm:col-span-2 lg:col-span-2">
           <label className="block text-xs font-medium text-forest-600 mb-1.5">Service name</label>
           <input
@@ -232,17 +266,18 @@ export default function AdminServicesPage() {
           </select>
         </div>
         <div className="sm:col-span-3 lg:col-span-6">
-          <button type="submit" className="rounded-lg bg-forest-600 text-sand-50 px-4 py-2 text-sm font-medium hover:bg-forest-700">
+          <button type="submit" disabled={busy} className="rounded-lg bg-forest-600 text-sand-50 px-4 py-2 text-sm font-medium hover:bg-forest-700">
             Add service
           </button>
-          {error && <span className="ml-3 text-sm text-clay">{error}</span>}
-        </div>
-      </form>
 
+        </div>
+      </form>}
+
+      <div className="service-catalog-toolbar"><input type="search" aria-label="Search services and categories" placeholder="Search services or categories" value={search} onChange={e => setSearch(e.target.value)} />
       <label className="flex items-center gap-2 text-sm text-forest-600 mb-4">
         <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
         Show hidden services
-      </label>
+      </label></div>
 
       {loading ? (
         <p className="text-forest-500/70">Loading…</p>
@@ -253,21 +288,25 @@ export default function AdminServicesPage() {
           {groupNames.map((groupName) => {
             const items = allGrouped.get(groupName)!;
             const activeCount = items.filter((s) => s.is_active).length;
+            const category = categories.find(c => c.name === groupName);
             return (
+              <div key={groupName} className="service-category-wrapper">
               <button
-                key={groupName}
                 onClick={() => setOpenGroup(groupName)}
-                className="text-left bg-white rounded-xl2 border border-forest-100 shadow-card p-5 hover:border-forest-300 hover:-translate-y-0.5 transition-transform"
+                className="service-category-card w-full text-left bg-white rounded-xl2 border border-forest-100 shadow-card p-5 hover:border-forest-300 hover:-translate-y-0.5 transition-transform"
               >
-                <h2 className="font-display text-lg mb-1">{groupName}</h2>
+                <div className="service-category-top"><span aria-hidden="true">✦</span><span aria-hidden="true">↗</span></div><h2 className="font-display text-lg mb-1">{groupName}</h2>
                 <p className="text-sm text-forest-500/70">
                   {items.length} service{items.length === 1 ? '' : 's'}
                   {activeCount !== items.length ? ` · ${activeCount} active` : ''}
                 </p>
+                <p className="service-category-price">{items.length ? `From ${new Intl.NumberFormat('en-TZ').format(Math.min(...items.map(s => Number(s.price))))} TZS` : 'Ready for your first service'}</p>
               </button>
+              {category && <button type="button" disabled={removingCategory !== null} onClick={() => removeCategory(category)} className="service-category-remove">{removingCategory === category.id ? 'Removing…' : 'Remove category'}</button>}
+              </div>
             );
           })}
-          {groupNames.length === 0 && <p className="text-forest-500/60 text-sm">No services yet — add one above.</p>}
+          {groupNames.length === 0 && <p className="text-forest-500/60 text-sm">No matching categories or services. Add a service or adjust your search.</p>}
         </div>
       ) : (
         // --- One category's services, with the usual filters + table. ---
@@ -278,9 +317,11 @@ export default function AdminServicesPage() {
           >
             ← All categories
           </button>
+          {categories.find(c => c.name === openGroup) && <button type="button" disabled={removingCategory !== null} onClick={() => { const category = categories.find(c => c.name === openGroup); if (category) removeCategory(category); }} className="service-category-remove ml-4">{removingCategory !== null ? 'Removing…' : 'Remove category'}</button>}
 
           <div className="flex flex-wrap items-center gap-3 mb-4">
             <select
+              aria-label="Filter services by branch"
               value={filterBranch}
               onChange={(e) => setFilterBranch(e.target.value)}
               className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
@@ -293,6 +334,7 @@ export default function AdminServicesPage() {
               ))}
             </select>
             <select
+              aria-label="Sort services"
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
               className="rounded-lg border border-forest-200 px-3 py-2 text-sm bg-white"
@@ -335,6 +377,7 @@ export default function AdminServicesPage() {
                       <td className="px-4 py-3 whitespace-nowrap">{new Intl.NumberFormat('en-TZ').format(s.price)} TZS</td>
                       <td className="px-4 py-3">
                         <select
+                          aria-label={`Category for ${s.name}`}
                           value={s.category_id || ''}
                           onChange={(e) => updateServiceField(s, 'category_id', e.target.value)}
                           className="rounded-lg border border-forest-200 px-2 py-1.5 text-xs"
@@ -349,6 +392,7 @@ export default function AdminServicesPage() {
                       </td>
                       <td className="px-4 py-3">
                         <select
+                          aria-label={`Branch for ${s.name}`}
                           value={s.branch_id || ''}
                           onChange={(e) => updateServiceField(s, 'branch_id', e.target.value)}
                           className="rounded-lg border border-forest-200 px-2 py-1.5 text-xs"

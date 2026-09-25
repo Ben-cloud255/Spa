@@ -18,7 +18,7 @@ export default function PasswordInput({
       <button
         type="button"
         onClick={() => setVisible((v) => !v)}
-        tabIndex={-1}
+        aria-pressed={visible}
         aria-label={visible ? 'Hide password' : 'Show password'}
         className="absolute inset-y-0 right-0 flex items-center px-3 text-forest-400 hover:text-forest-700"
       >
@@ -42,3 +42,4 @@ export default function PasswordInput({
     </div>
   );
 }
+

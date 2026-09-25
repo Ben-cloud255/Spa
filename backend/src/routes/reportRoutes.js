@@ -3,6 +3,8 @@ const { getSummary, getDetail, getExecutive, getAnalytics } = require('../contro
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
+const { getOverview } = require('../controllers/overviewController');
+router.get('/overview', requireAuth, requireRole('admin'), getOverview);
 const { getManagement } = require('../controllers/managementReportController');
 router.get('/management', requireAuth, requireRole('admin', 'receptionist'), getManagement);
 

@@ -1,211 +1,68 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useRooms } from '@/lib/useRooms';
-import { useNotifications } from '@/lib/useNotifications';
+import { useEffect, useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
-import RoomCard from '@/components/RoomCard';
+import { getSocket } from '@/lib/socket';
+import { useAuth } from '@/context/AuthContext';
 import BranchFilter from '@/components/BranchFilter';
+import RoomCard from '@/components/RoomCard';
 import OnHoldList from '@/components/OnHoldList';
 import DetailedStatCard from '@/components/DetailedStatCard';
-import type { Booking } from '@/lib/types';
+import type { OverviewData } from '@/lib/overview';
 
-function money(n: number) {
-  return new Intl.NumberFormat('en-TZ').format(n);
+const money=(n:number)=>new Intl.NumberFormat('en-TZ',{maximumFractionDigits:0}).format(n);
+const short=(n:number)=>new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:1}).format(n);
+const time=(s:string)=>new Date(s).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'Africa/Nairobi'});
+function ago(s:string,now:string){const m=Math.max(0,Math.floor((Date.parse(now)-Date.parse(s))/60000));return m<1?'Just now':m<60?`${m}m ago`:m<1440?`${Math.floor(m/60)}h ago`:`${Math.floor(m/1440)}d ago`;}
+function Panel({title,subtitle,action,children}: {title:string;subtitle?:string;action?:ReactNode;children:ReactNode}){return <section className="rounded-2xl border border-forest-100 bg-white p-5 sm:p-6 min-w-0"><div className="flex justify-between items-start gap-3 mb-5"><div><h2 className="font-semibold text-ink">{title}</h2>{subtitle&&<p className="text-xs text-forest-500 mt-1">{subtitle}</p>}</div>{action}</div>{children}</section>;}
+function RevenueTrend({days}: {days:OverviewData['days']}){
+ const maximum=Math.max(1,...days.map(d=>d.amount));
+ return <div><div className="flex items-end gap-3 sm:gap-5 h-44 pt-6">{days.map((d,i)=><div key={d.date} className="flex-1 h-full flex flex-col items-center justify-end min-w-0"><span className="text-[10px] sm:text-xs tabular-nums text-forest-600 mb-2">{short(d.amount)}</span><div tabIndex={0} role="img" aria-label={`${d.date}: ${money(d.amount)} TZS`} title={`${d.date}: ${money(d.amount)} TZS`} className={`w-full max-w-12 rounded-t-md transition-colors ${i===6?'bg-honey-500':'bg-forest-200 hover:bg-forest-500'}`} style={{height:`${Math.max(1,d.amount/maximum*100)}%`}}/><span className="text-[10px] text-forest-500 mt-2">{i===6?'Today':new Date(d.date).toLocaleDateString('en-GB',{weekday:'short',timeZone:'Africa/Nairobi'})}</span></div>)}</div><p className="text-[10px] text-forest-500 mt-5">Daily collections in TZS · East Africa Time · Today is still in progress</p></div>;
 }
 
-function timeAgo(iso: string): string {
-  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="bg-white rounded-xl2 border border-forest-100 shadow-card p-5">
-      <p className="text-xs uppercase tracking-wide text-forest-500/70">{label}</p>
-      <p className="font-display text-3xl mt-1.5">{value}</p>
-      {hint && <p className="text-xs text-forest-500/60 mt-1">{hint}</p>}
-    </div>
-  );
-}
-
-export default function AdminOverviewPage() {
-  const [branchId, setBranchId] = useState('');
-  const { rooms, loading } = useRooms(branchId);
-  const { notifications } = useNotifications(branchId);
-  const [bookings, setBookings] = useState<Booking[]>([]);
-
-  useEffect(() => {
-    const query = branchId ? `?branchId=${branchId}` : '';
-    api.get<{ bookings: Booking[] }>(`/bookings${query}`).then((d) => setBookings(d.bookings));
-  }, [branchId]);
-
-  const stats = useMemo(() => {
-    const active = rooms.filter((r) => r.status === 'active').length;
-    const pending = rooms.filter((r) => r.status === 'pending').length;
-    const free = rooms.filter((r) => r.status === 'inactive').length;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todaysRevenue = bookings
-      .filter((b) => new Date(b.created_at) >= today)
-      .reduce((sum, b) => sum + Number(b.amount_paid), 0);
-    const customersServedToday = bookings.filter(
-      (b) => b.status === 'completed' && b.ended_at && new Date(b.ended_at) >= today
-    ).length;
-
-    return { active, pending, free, todaysRevenue, customersServedToday };
-  }, [rooms, bookings]);
-
-  // When looking at every branch, break these two numbers down by branch —
-  // once a specific branch is chosen, that split is meaningless, so switch
-  // to a per-provider breakdown instead.
-  const groupKey: 'branch_name' | 'provider_name' = branchId ? 'provider_name' : 'branch_name';
-  const groupLabel = branchId ? 'By provider' : 'By branch';
-
-  const revenueSections = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todays = bookings.filter((b) => new Date(b.created_at) >= today && Number(b.amount_paid) > 0);
-    const groups = new Map<string, Booking[]>();
-    for (const b of todays) {
-      const key = b[groupKey] || 'Unassigned';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(b);
-    }
-    return [...groups.entries()]
-      .sort((a, b) => b[1].reduce((s, x) => s + Number(x.amount_paid), 0) - a[1].reduce((s, x) => s + Number(x.amount_paid), 0))
-      .map(([heading, group]) => ({
-        heading,
-        total: `${money(group.reduce((s, b) => s + Number(b.amount_paid), 0))} TZS`,
-        rows: group
-          .sort((a, b) => Number(b.amount_paid) - Number(a.amount_paid))
-          .map((b) => ({
-            label: b.customer_name,
-            sublabel: `${b.provider_name} · recorded by ${b.receptionist_name}`,
-            value: `${money(Number(b.amount_paid))} TZS`,
-          })),
-      }));
-  }, [bookings, groupKey]);
-
-  const customersServedSections = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const completedToday = bookings.filter(
-      (b) => b.status === 'completed' && b.ended_at && new Date(b.ended_at) >= today
-    );
-    const groups = new Map<string, Booking[]>();
-    for (const b of completedToday) {
-      const key = b[groupKey] || 'Unassigned';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(b);
-    }
-    return [...groups.entries()]
-      .sort((a, b) => b[1].length - a[1].length)
-      .map(([heading, group]) => ({
-        heading,
-        total: `${group.length} customer${group.length === 1 ? '' : 's'}`,
-        rows: group
-          .sort((a, b) => new Date(b.ended_at!).getTime() - new Date(a.ended_at!).getTime())
-          .map((b) => ({
-            label: b.customer_name,
-            sublabel: `${b.service_name} · ${b.provider_name}`,
-            value: new Date(b.ended_at!).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-          })),
-      }));
-  }, [bookings, groupKey]);
-
-  return (
-    <div>
-      <div className="flex items-start justify-between flex-wrap gap-3 mb-1">
-        <h1 className="font-display text-3xl">Overview</h1>
-        <BranchFilter value={branchId} onChange={setBranchId} />
-      </div>
-      <p className="text-forest-500/70 text-sm mb-8">
-        {branchId ? 'What\u2019s happening at this branch, right now.' : 'Every branch, in one place, right now.'}
-      </p>
-
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-        <div className="animate-fadeInUp" style={{ animationDelay: '0ms' }}>
-          <StatCard label="In session" value={String(stats.active)} hint={`of ${rooms.length} rooms`} />
-        </div>
-        <div className="animate-fadeInUp" style={{ animationDelay: '40ms' }}>
-          <StatCard label="Awaiting confirmation" value={String(stats.pending)} />
-        </div>
-        <div className="animate-fadeInUp" style={{ animationDelay: '80ms' }}>
-          <StatCard label="Free rooms" value={String(stats.free)} />
-        </div>
-        <div className="animate-fadeInUp" style={{ animationDelay: '120ms' }}>
-          <DetailedStatCard
-            label="Revenue today"
-            value={`${money(stats.todaysRevenue)}`}
-            hint="TZS collected"
-            sections={revenueSections}
-            modalTitle="Revenue collected today"
-            modalHint={groupLabel}
-          />
-        </div>
-        <div className="animate-fadeInUp" style={{ animationDelay: '160ms' }}>
-          <DetailedStatCard
-            label="Customers served today"
-            value={String(stats.customersServedToday)}
-            sections={customersServedSections}
-            modalTitle="Customers served today"
-            modalHint={groupLabel}
-          />
-        </div>
-      </div>
-
-      <OnHoldList branchId={branchId} />
-
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-        <div className="xl:col-span-2">
-          <h2 className="font-display text-xl mb-4">Rooms</h2>
-          {loading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="h-40 rounded-xl2 border border-forest-100 bg-white overflow-hidden relative">
-                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-sand-200/60 to-transparent bg-[length:400px_100%] animate-shimmer" />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              {rooms.map((room, i) => (
-                <div key={room.id} className="animate-fadeInUp" style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}>
-                  <RoomCard room={room} />
-                </div>
-              ))}
-              {rooms.length === 0 && (
-                <p className="text-forest-500/60 text-sm">No rooms found for this branch yet.</p>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h2 className="font-display text-xl mb-4">Latest activity</h2>
-          <div className="bg-white rounded-xl2 border border-forest-100 shadow-card divide-y divide-forest-50 max-h-[640px] overflow-y-auto">
-            {notifications.slice(0, 25).map((n) => (
-              <div key={n.id} className="px-4 py-3">
-                <div className="flex items-center justify-between gap-2 mb-0.5">
-                  <span className="text-[11px] font-semibold text-forest-600 uppercase tracking-wide">{n.type.replace(/_/g, ' ')}</span>
-                  <span className="text-[11px] text-forest-500/60 whitespace-nowrap">{timeAgo(n.created_at)}</span>
-                </div>
-                <p className="text-sm text-ink leading-snug">{n.message}</p>
-              </div>
-            ))}
-            {notifications.length === 0 && (
-              <p className="text-sm text-forest-500/60 px-4 py-6 text-center">No activity yet today.</p>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+export default function AdminOverviewPage(){
+ const {user}=useAuth();
+ const [branchId,setBranchId]=useState('');
+ const [data,setData]=useState<OverviewData|null>(null);
+ const [loading,setLoading]=useState(true),[refreshing,setRefreshing]=useState(false),[error,setError]=useState('');
+ const [revision,setRevision]=useState(0),[roomFilter,setRoomFilter]=useState('all'),[selectedRoom,setSelectedRoom]=useState<number|null>(null),[showAllRooms,setShowAllRooms]=useState(false);
+ useEffect(()=>{
+  let disposed=false,busy=false;let debounce:ReturnType<typeof setTimeout>|undefined;
+  setData(null);setLoading(true);setSelectedRoom(null);
+  async function load(){if(busy||disposed)return;busy=true;setRefreshing(true);try{const next=await api.get<OverviewData>(`/reports/overview${branchId?`?branchId=${branchId}`:''}`);if(!disposed){setData(next);setError('');}}catch(e){if(!disposed)setError(e instanceof Error?e.message:'Could not refresh the overview.');}finally{busy=false;if(!disposed){setLoading(false);setRefreshing(false);}}}
+  load();const timer=setInterval(()=>{if(document.visibilityState==='visible')load();},30000);
+  const onEvent=()=>{clearTimeout(debounce);debounce=setTimeout(load,400);};
+  const socket=getSocket();socket?.on('room:updated',onEvent);socket?.on('notification:new',onEvent);
+  const onVisible=()=>{if(document.visibilityState==='visible')load();};document.addEventListener('visibilitychange',onVisible);
+  return()=>{disposed=true;clearInterval(timer);clearTimeout(debounce);socket?.off('room:updated',onEvent);socket?.off('notification:new',onEvent);document.removeEventListener('visibilitychange',onVisible);};
+ },[branchId,revision]);
+ const t=data?.totals;
+ const grouping=branchId?'provider_name':'branch_name';
+ const revenueSections=data?Array.from(new Set(data.payments.map(p=>p[grouping]||'Unassigned'))).map(heading=>{const rows=data.payments.filter(p=>(p[grouping]||'Unassigned')===heading);return {heading,total:`${money(rows.reduce((n,p)=>n+Number(p.amount),0))} TZS`,rows:rows.map(p=>({label:p.customer_name,sublabel:`${p.provider_name||'Unassigned'} · ${time(p.created_at)} · ${p.receptionist_name||'Staff'}`,value:`${money(Number(p.amount))} TZS`}))};}):[];
+ const servedSections=data?Array.from(new Set(data.completed.map(b=>b[grouping]||'Unassigned'))).map(heading=>{const rows=data.completed.filter(b=>(b[grouping]||'Unassigned')===heading);return {heading,total:`${rows.length} sessions`,rows:rows.map(b=>({label:b.customer_name,sublabel:`${b.service_name} · ${b.provider_name}`,value:time(b.ended_at)}))};}):[];
+ const filteredRooms=data?.rooms.filter(r=>roomFilter==='all'||r.status===roomFilter)||[];
+ const picked=data?.rooms.find(r=>r.id===selectedRoom);
+ const capacity=data?.rooms.length||0;
+ const availablePercent=capacity&&t?Math.round(t.free/capacity*100):0;
+ const arrowLink='text-xs font-semibold text-forest-600 whitespace-nowrap hover:underline';
+ return <div className="space-y-6 pb-8">
+  <header className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-[10px] font-bold tracking-[0.22em] uppercase text-forest-500 mb-2">Daily overview</p><h1 className="font-display text-4xl">Welcome back{user?.name?`, ${user.name.split(' ')[0]}`:''}.</h1><p className="text-sm text-forest-500 mt-2">Your spa at a glance. Stay close to the details that matter today.</p></div><div className="flex gap-2"><Link href="/admin/reports" className="rounded-lg bg-forest-700 text-white px-4 py-2.5 text-sm font-medium">Generate a report ↗</Link></div></header>
+  <div className="rounded-xl bg-forest-50/70 border border-forest-100 p-3 flex flex-wrap justify-between items-center gap-3"><div className="flex items-center gap-3"><span className="sr-only" id="overview-branch-label">Filter by branch</span><div aria-labelledby="overview-branch-label"><BranchFilter value={branchId} onChange={setBranchId}/></div><span className="hidden sm:block text-xs text-forest-500">{new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',timeZone:'Africa/Nairobi'})}</span></div><div className="flex gap-3 items-center"><span className="text-[11px] text-forest-500">{data?`Updated ${time(data.updatedAt)} EAT`:'Loading latest figures'}</span><button disabled={refreshing} onClick={()=>setRevision(v=>v+1)} className="text-xs font-semibold text-forest-600 disabled:opacity-40">↻ Refresh</button></div></div>
+  {error&&<div role="alert" className="rounded-xl bg-clay/5 border border-clay/20 p-4 text-sm text-clay">{error}{data&&' Showing the last successful update.'} <button onClick={()=>setRevision(v=>v+1)} className="underline font-medium ml-2">Retry</button></div>}
+  {loading?<div role="status" aria-label="Loading overview"><div className="grid grid-cols-2 xl:grid-cols-4 gap-4">{[0,1,2,3].map(i=><div key={i} className="h-36 rounded-2xl bg-forest-50 animate-pulse"/>)}</div><div className="h-80 rounded-2xl bg-forest-50 animate-pulse mt-5"/></div>:data&&t&&<>
+   <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+    <DetailedStatCard label="Collected today" value={money(t.collected)} hint="TZS · click to see payments" sections={revenueSections} modalTitle="Payments received today" modalHint="Based on payment receipt date, including older bookings"/>
+    <DetailedStatCard label="Sessions completed" value={String(t.completed)} hint={`${t.bookings} new bookings today · view details`} sections={servedSections} modalTitle="Sessions completed today" modalHint="Based on completion time in East Africa Time"/>
+    <button onClick={()=>{setRoomFilter('inactive');document.getElementById('overview-rooms')?.scrollIntoView({behavior:'smooth'});}} className="text-left rounded-2xl border border-forest-100 bg-white p-5 hover:border-forest-300"><p className="text-xs uppercase tracking-wide text-forest-500">Available rooms</p><p className="font-display text-3xl mt-1.5">{t.free}<span className="text-base text-forest-400"> / {capacity}</span></p><p className="text-xs text-forest-500 mt-1">Ready for the next customer ↗</p></button>
+    <Link href="/admin/reports" className="rounded-2xl bg-forest-800 text-white p-5"><p className="text-xs uppercase tracking-wide text-forest-200">Outstanding balance</p><p className="font-display text-3xl mt-1.5">{money(t.outstanding)}</p><p className="text-xs text-forest-200 mt-1">TZS · {t.unpaid} unpaid bookings · all dates ↗</p></Link>
+   </div>
+   <div className="grid grid-cols-1 xl:grid-cols-3 gap-5"><div className="xl:col-span-2"><Panel title="Collections this week" subtitle="The last seven days, including today" action={<Link href="/admin/analytics" className={arrowLink}>Explore analytics ↗</Link>}><div className="flex flex-wrap gap-3 items-baseline"><span className="text-3xl font-semibold tracking-tight">{money(data.days.reduce((n,d)=>n+d.amount,0))}</span><span className="text-xs text-forest-500">TZS collected</span></div><p className="text-xs mt-2 text-forest-500">{t.yesterdayCollected?`${t.collected>=t.yesterdayCollected?'↑':'↓'} ${Math.abs((t.collected-t.yesterdayCollected)/t.yesterdayCollected*100).toFixed(1)}% today vs yesterday at the same time`:'No collections at this time yesterday to compare.'}</p><RevenueTrend days={data.days}/></Panel></div><Panel title="Needs your attention" subtitle="A short list of follow-ups"><div className="space-y-2">{[{label:'Sessions past expected end',count:t.overdue,href:'/admin/rooms',hint:'Check with the provider'},{label:'Awaiting confirmation',count:t.pending,href:'/admin/rooms',hint:'Rooms waiting to start'},{label:'Bookings on hold',count:t.onHold,href:'#on-hold',hint:'Review or resume the booking'},{label:'Low-stock alerts',count:data.lowStock.length,href:'/admin/inventory',hint:'At or below branch minimum'}].map(a=><Link key={a.label} href={a.href} className={`flex justify-between items-center gap-3 rounded-xl p-3 ${a.count?'bg-sand-100 hover:bg-sand-200':'bg-forest-50/40'}`}><div><p className="text-sm font-medium">{a.label}</p><p className="text-[11px] text-forest-500 mt-0.5">{a.hint}</p></div><span className={`text-lg font-semibold tabular-nums ${a.count?'text-clay':'text-forest-400'}`}>{a.count}</span></Link>)}</div></Panel></div>
+   <div className="grid grid-cols-1 xl:grid-cols-3 gap-5"><div className="xl:col-span-2"><Panel title="Branches at a glance" subtitle="Room availability now and collections received today" action={branchId?<button onClick={()=>setBranchId('')} className={arrowLink}>All branches ↗</button>:undefined}><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="text-[10px] text-forest-500 uppercase tracking-wide border-b border-forest-100"><tr><th className="text-left pb-3">Branch</th><th className="text-right pb-3 px-3">In session</th><th className="text-right pb-3 px-3">Free</th><th className="text-right pb-3">Collected · TZS</th></tr></thead><tbody>{data.branches.map(b=><tr key={b.id??'none'} className="border-b last:border-0 border-forest-50"><td className="py-4">{b.id?<button onClick={()=>setBranchId(String(b.id))} className="font-medium text-forest-700 hover:underline">{b.name}</button>:b.name}<p className="text-[10px] text-forest-500 mt-1">{b.completed} sessions completed today</p></td><td className="text-right px-3 tabular-nums">{b.active}</td><td className="text-right px-3 tabular-nums text-forest-600">{b.free}</td><td className="text-right font-semibold tabular-nums">{money(b.collected)}</td></tr>)}</tbody></table>{data.branches.length===0&&<p className="py-8 text-center text-sm text-forest-500">No branches in this view.</p>}</div></Panel></div><Panel title="Room availability" subtitle="Current room status"><div className="flex items-baseline gap-2"><span className="text-4xl font-semibold tracking-tight">{availablePercent}%</span><span className="text-xs text-forest-500">available now</span></div><div className="flex h-3 rounded-full overflow-hidden bg-forest-50 my-6">{capacity>0&&<><div className="bg-forest-500" style={{width:`${t.active/capacity*100}%`}}/><div className="bg-honey-500" style={{width:`${t.pending/capacity*100}%`}}/><div className="bg-forest-100" style={{width:`${t.free/capacity*100}%`}}/></>}</div><div className="space-y-3">{[['In session',t.active,'bg-forest-500'],['Pending confirmation',t.pending,'bg-honey-500'],['Free rooms',t.free,'bg-forest-100']].map(([label,count,color])=><div key={label} className="flex justify-between text-sm"><span className="flex items-center gap-2 text-forest-600"><span className={`w-2 h-2 rounded-full ${color}`}/>{label}</span><strong>{count}</strong></div>)}</div></Panel></div>
+   <div id="on-hold">{t.onHold>0&&<details className="rounded-2xl border border-honey-500/30 bg-white p-5"><summary className="cursor-pointer font-medium text-sm">Review {t.onHold} on-hold bookings</summary><div className="mt-5"><OnHoldList key={branchId} branchId={branchId} refreshTrigger={Date.parse(data.updatedAt)}/></div></details>}</div>
+   <div id="overview-rooms" className="scroll-mt-4"><Panel title="Live room board" subtitle="Select a room to view the customer, provider, and session details" action={<Link href="/admin/rooms" className={arrowLink}>Manage rooms ↗</Link>}><div className="flex flex-wrap gap-2 mb-4">{[['all','All rooms'],['active','In session'],['pending','Pending'],['inactive','Available']].map(([value,label])=><button key={value} onClick={()=>{setRoomFilter(value);setSelectedRoom(null);}} aria-pressed={roomFilter===value} className={`text-xs rounded-full px-3 py-1.5 ${roomFilter===value?'bg-forest-700 text-white':'bg-forest-50 text-forest-600'}`}>{label}</button>)}</div><div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">{(showAllRooms?filteredRooms:filteredRooms.slice(0,6)).map(room=><button key={room.id} onClick={()=>setSelectedRoom(selectedRoom===room.id?null:room.id)} aria-expanded={selectedRoom===room.id} aria-controls="overview-room-detail" className={`text-left rounded-xl border p-4 ${selectedRoom===room.id?'border-forest-500 bg-forest-50':'border-forest-100 hover:bg-sand-50'}`}><div className="flex justify-between gap-2"><strong className="text-sm">{room.name}</strong><span className={`text-[10px] rounded-full px-2 py-1 ${room.status==='active'?'bg-forest-50 text-forest-600':room.status==='pending'?'bg-honey-500/10 text-honey-600':'bg-sand-100 text-forest-500'}`}>{room.status==='inactive'?'Available':room.status==='active'?'In session':'Pending'}</span></div><p className="text-[10px] text-forest-500 mt-1">{room.branch?.name||'Unassigned'}</p><p className="text-xs mt-3 truncate">{room.currentBooking?.customerName||'Ready for a new booking'}</p><p className="text-[10px] text-forest-500 mt-1 truncate">{room.currentBooking?.service.name||room.provider?.name||'No provider assigned'}</p></button>)}</div>{!filteredRooms.length&&<p className="py-6 text-center text-sm text-forest-500">No rooms match this view.</p>}{filteredRooms.length>6&&<button onClick={()=>setShowAllRooms(!showAllRooms)} className="mt-4 text-xs font-semibold text-forest-600 underline">{showAllRooms?'Show fewer rooms':`Show all ${filteredRooms.length} rooms`}</button>}{picked&&<div id="overview-room-detail" className="mt-5 max-w-xl"><div className="flex justify-between mb-2"><p className="text-xs text-forest-500">Room details</p><button onClick={()=>setSelectedRoom(null)} className="text-xs underline">Close</button></div><RoomCard room={picked}/></div>}</Panel></div>
+   <div className="grid grid-cols-1 lg:grid-cols-2 gap-5"><Panel title="Recent activity" subtitle="Latest updates across the selected scope" action={<Link href="/admin/notifications" className={arrowLink}>All notifications ↗</Link>}><div className="divide-y divide-forest-50">{data.notifications.map(n=><div key={n.id} className="py-3 first:pt-0"><div className="flex justify-between gap-3 mb-1"><span className="text-[10px] uppercase tracking-wide font-semibold text-forest-500">{n.type.replaceAll('_',' ')}</span><time className="text-[10px] text-forest-400 whitespace-nowrap">{ago(n.created_at,data.updatedAt)}</time></div><p className="text-sm leading-relaxed">{n.message}</p></div>)}{!data.notifications.length&&<p className="py-6 text-sm text-center text-forest-500">No activity recorded yet.</p>}</div></Panel><Panel title="Inventory watch" subtitle="Branch items at or below their minimum quantity" action={<Link href="/admin/inventory" className={arrowLink}>Open inventory ↗</Link>}>{data.lowStock.length?<div className="space-y-3">{data.lowStock.slice(0,5).map(s=><div key={s.id} className="flex justify-between gap-3 rounded-xl bg-sand-100/70 p-3"><div><p className="font-medium text-sm">{s.item}</p><p className="text-xs text-forest-500 mt-1">{s.branch}</p></div><div className="text-right"><p className="font-semibold text-clay">{Number(s.quantity)}</p><p className="text-[10px] text-forest-500">Minimum {Number(s.minimum)}</p></div></div>)}{data.lowStock.length>5&&<Link href="/admin/inventory" className={arrowLink}>View all {data.lowStock.length} stock alerts ↗</Link>}</div>:<div className="rounded-xl bg-forest-50 p-6"><p className="font-medium text-forest-700">No low-stock alerts</p><p className="text-sm text-forest-500 mt-2">Recorded branch balances are above their minimum levels.</p></div>}<div className="border-t border-forest-100 mt-6 pt-4 flex flex-wrap gap-4"><Link href="/admin/reports" className={arrowLink}>Reports ↗</Link><Link href="/admin/analytics" className={arrowLink}>Analytics ↗</Link><Link href="/admin/users" className={arrowLink}>Staff accounts ↗</Link></div></Panel></div>
+   <p className="text-[10px] text-forest-500 text-center">Updates every 30 seconds while this page is visible. Collections use payment dates; completed sessions use completion dates. All times are East Africa Time.</p>
+  </>}
+ </div>;
 }

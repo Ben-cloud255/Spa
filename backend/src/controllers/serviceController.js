@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { logAudit } = require('../utils/auditLog');
 
 const SERVICE_SELECT = `
   SELECT s.*, c.name AS category_name, b.name AS branch_name
@@ -48,6 +49,7 @@ async function createService(req, res) {
       [name.trim(), description || null, duration_minutes, price || 0, category_id || null, branch_id || null]
     );
     const full = await db.query(`${SERVICE_SELECT} WHERE s.id = $1`, [result.rows[0].id]);
+    await logAudit(req, { action: 'Service created', entityType: 'service', entityLabel: `${full.rows[0].name} · ${full.rows[0].price} TZS · ${full.rows[0].duration_minutes} min`, branchId: full.rows[0].branch_id });
     return res.status(201).json({ service: full.rows[0] });
   } catch (err) {
     console.error('Create service error:', err);
@@ -65,6 +67,8 @@ async function updateService(req, res) {
   const hasCategoryField = Object.prototype.hasOwnProperty.call(req.body, 'category_id');
 
   try {
+    const previous = await db.query('SELECT * FROM services WHERE id = $1', [id]);
+    if (!previous.rows.length) return res.status(404).json({ error: 'Service not found.' });
     const sets = [];
     const values = [];
     let i = 1;
@@ -86,7 +90,12 @@ async function updateService(req, res) {
       return res.status(404).json({ error: 'Service not found.' });
     }
     const full = await db.query(`${SERVICE_SELECT} WHERE s.id = $1`, [id]);
-    return res.json({ service: full.rows[0] });
+    const current = full.rows[0];
+    const labels = { name: 'Name', duration_minutes: 'Duration (min)', price: 'Price (TZS)', is_active: 'Available', category_id: 'Category ID', branch_id: 'Branch ID' };
+    const changes = Object.entries(labels).filter(([key]) => Object.prototype.hasOwnProperty.call(req.body, key) && String(previous.rows[0][key]) !== String(current[key])).map(([key, label]) => `${label}: ${previous.rows[0][key] ?? 'None'} → ${current[key] ?? 'None'}`);
+    if (Object.prototype.hasOwnProperty.call(req.body, 'description') && previous.rows[0].description !== current.description) changes.push('Description updated');
+    if (changes.length) await logAudit(req, { action: 'Service updated', entityType: 'service', entityLabel: `${current.name} · ${changes.join('; ')}`, branchId: current.branch_id });
+    return res.json({ service: current });
   } catch (err) {
     console.error('Update service error:', err);
     return res.status(500).json({ error: 'Could not update the service.' });

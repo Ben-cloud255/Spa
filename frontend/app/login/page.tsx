@@ -5,12 +5,9 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { ApiError } from '@/lib/api';
 import PasswordInput from '@/components/PasswordInput';
-import Image from 'next/image';
 
 const ROLE_HOME: Record<string, string> = {
-  admin: '/admin',
-  receptionist: '/receptionist',
-  provider: '/provider',
+  admin: '/admin', receptionist: '/receptionist', provider: '/provider',
 };
 
 export default function LoginPage() {
@@ -23,10 +20,11 @@ export default function LoginPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (submitting) return;
     setError(null);
     setSubmitting(true);
     try {
-      const user = await login(email, password);
+      const user = await login(email.trim(), password);
       router.replace(ROLE_HOME[user.role] || '/');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not sign in. Please try again.');
@@ -36,97 +34,36 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen grid lg:grid-cols-2">
-      {/* Brand panel */}
-      <div className="hidden lg:flex flex-col justify-between text-ink p-12 relative overflow-hidden bg-sand-100">
-        <div className="absolute inset-0 opacity-[0.06]" aria-hidden>
-          <svg width="100%" height="100%" viewBox="0 0 400 400" fill="none">
-            <path d="M0 200 Q 100 140 200 200 T 400 200" stroke="currentColor" strokeWidth="1" />
-            <path d="M0 260 Q 100 200 200 260 T 400 260" stroke="currentColor" strokeWidth="1" />
-            <path d="M0 320 Q 100 260 200 320 T 400 320" stroke="currentColor" strokeWidth="1" />
-          </svg>
-        </div>
-        <div className="relative z-10">
-          <p className="uppercase tracking-[0.3em] text-xs font-bold text-ink">Staff Portal</p>
-          <h1 className="font-display italic text-5xl mt-4 leading-tight font-bold text-ink">Serene Spa</h1>
-        </div>
-        <div className="relative z-10 space-y-4">
-          <div className="aspect-[4/3] w-full rounded-xl2 overflow-hidden">
-  <Image
-    src="/spa3.jpg"
-    alt="Serene Spa"
-    width={800}
-    height={600}
-    className="w-full h-full object-cover"
-    priority
-  />
-</div>
-          <p className="text-ink font-bold text-sm max-w-sm">
-            Rooms, bookings, and every service session — tracked in one calm, reliable place.
-          </p>
-        </div>
-      </div>
-
-      {/* Form panel */}
-      <div className="flex items-center justify-center p-8 bg-sand-100">
-        <div className="w-full max-w-sm">
-          <div className="lg:hidden mb-8 text-center">
-            <h1 className="font-display italic text-3xl text-forest-700">Serene Spa</h1>
+    <div className="staff-login">
+      <header className="staff-login-header">
+        <div className="staff-login-brand"><span className="staff-login-monogram" aria-hidden="true">S</span><div><p>Serene Spa</p><span>MANAGEMENT SYSTEM</span></div></div>
+        <span className="staff-login-header-label">Staff portal</span>
+      </header>
+      <main className="staff-login-main">
+        <section className="staff-login-card" aria-labelledby="login-heading">
+          <div className="staff-login-intro">
+            <span className="staff-login-icon" aria-hidden="true"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3" strokeLinecap="round"/></svg></span>
+            <p className="staff-login-eyebrow">YOUR WORKSPACE AWAITS</p>
+            <h1 id="login-heading">Sign in to your account</h1>
+            <p className="staff-login-description">Welcome back. Enter your staff credentials to continue.</p>
           </div>
-          <h2 className="font-display text-2xl text-ink mb-1">Welcome</h2>
-          <p className="text-forest-500/80 text-sm mb-8">Sign in with the account your admin set up for you.</p>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="staff-login-form" aria-busy={submitting}>
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-ink mb-1.5">
-                Email address
-              </label>
-              <input
-                id="email"
-                type="email"
-                required
-                autoComplete="username"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-lg border border-forest-200 bg-white px-3.5 py-2.5 text-sm focus:border-forest-500 focus:ring-1 focus:ring-forest-500 outline-none"
-                placeholder="you@serenespa.com"
-              />
+              <label htmlFor="email">Email address</label>
+              <input id="email" name="email" type="email" required autoComplete="username" autoCapitalize="none" spellCheck={false} value={email} onChange={e => setEmail(e.target.value)} className="staff-login-input" placeholder="you@serenespa.com" readOnly={submitting} />
             </div>
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-ink mb-1.5">
-                Password
-              </label>
-              <PasswordInput
-                id="password"
-                required
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-lg border border-forest-200 bg-white px-3.5 py-2.5 text-sm focus:border-forest-500 focus:ring-1 focus:ring-forest-500 outline-none"
-                placeholder="••••••••"
-              />
+              <label htmlFor="password">Password</label>
+              <PasswordInput id="password" name="password" required autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} className="staff-login-input" placeholder="Enter your password" readOnly={submitting} />
             </div>
-
-            {error && (
-              <p role="alert" className="text-sm text-clay bg-clay/10 rounded-lg px-3 py-2">
-                {error}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full rounded-lg bg-forest-600 text-sand-50 font-medium py-2.5 text-sm hover:bg-forest-700 transition-colors disabled:opacity-60"
-            >
-              {submitting ? 'Signing in…' : 'Sign in'}
-            </button>
+            {error && <p role="alert" className="staff-login-error">{error}</p>}
+            <button type="submit" disabled={submitting} className="staff-login-submit"><span>{submitting ? 'Signing in…' : 'Sign in'}</span>{!submitting && <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 12h14m-5-5 5 5-5 5" strokeLinecap="round" strokeLinejoin="round"/></svg>}</button>
           </form>
-
-          <p className="text-xs text-forest-500/60 mt-8">
-            Lost your password? Ask your admin to reset it from the Staff Accounts page.
-          </p>
-        </div>
-      </div>
+          <div className="staff-login-help"><p>Need help signing in?</p><span>Contact your administrator for account access or a password reset.</span></div>
+        </section>
+        <p className="staff-login-access">For authorized Serene Spa staff only.</p>
+      </main>
+      <footer className="staff-login-footer"><span>Serene Spa</span><span>One workspace. Every detail.</span></footer>
     </div>
   );
 }

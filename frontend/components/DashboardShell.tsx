@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useAuth } from '@/context/AuthContext';
 import NotificationBell from '@/components/NotificationBell';
@@ -11,237 +11,119 @@ import { unlockAudioContext } from '@/lib/alertSound';
 import PushToggle from '@/components/PushToggle';
 import ChangePasswordModal from '@/components/ChangePasswordModal';
 
-export interface NavItem {
-  href: string;
-  label: string;
-  icon: ReactNode;
-  children?: NavItem[];
+export interface NavItem { href: string; label: string; icon: ReactNode; children?: NavItem[]; }
+
+function Chevron({ reverse = false }: { reverse?: boolean }) {
+  return <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ transform: reverse ? 'rotate(180deg)' : undefined }}><path d="m14 6-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
-export default function DashboardShell({
-  navItems,
-  children,
-}: {
-  navItems: NavItem[];
-  children: ReactNode;
-}) {
+export default function DashboardShell({ navItems, children }: { navItems: NavItem[]; children: ReactNode }) {
   const { user, logout } = useAuth();
   const pathname = usePathname();
   const [navOpen, setNavOpen] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
-  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
-    const initial = new Set<string>();
-    for (const item of navItems) {
-      if (item.children?.some((c) => c.href === pathname)) initial.add(item.label);
-    }
-    return initial;
-  });
-
-  function toggleGroup(label: string) {
-    setOpenGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      return next;
-    });
-  }
+  const [collapsed, setCollapsed] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountRef = useRef<HTMLDivElement>(null);
+  const accountButton = useRef<HTMLButtonElement>(null);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(navItems.filter(item => item.children?.some(child => child.href === pathname)).map(item => item.label)));
+  const initials = (user?.name || 'Account').trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
 
   useEffect(() => {
-    const unlock = () => {
-      unlockAudioContext();
-      window.removeEventListener('pointerdown', unlock);
-    };
+    try { setCollapsed(localStorage.getItem('serene-sidebar-collapsed') === 'true'); } catch { /* Storage may be unavailable. */ }
+    const unlock = () => unlockAudioContext();
     window.addEventListener('pointerdown', unlock, { once: true });
     return () => window.removeEventListener('pointerdown', unlock);
   }, []);
 
-  // Close the mobile drawer automatically whenever they navigate.
   useEffect(() => {
     setNavOpen(false);
-  }, [pathname]);
+    setAccountOpen(false);
+    setOpenGroups(previous => {
+      const next = new Set(previous);
+      navItems.forEach(item => { if (item.children?.some(child => child.href === pathname)) next.add(item.label); });
+      return next;
+    });
+  }, [pathname, navItems]);
+
+  useEffect(() => {
+    if (!accountOpen && !navOpen) return;
+    const outside = (event: PointerEvent) => {
+      if (accountOpen && !accountRef.current?.contains(event.target as Node)) setAccountOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (accountOpen) { setAccountOpen(false); accountButton.current?.focus(); }
+      else setNavOpen(false);
+    };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); };
+  }, [accountOpen, navOpen]);
+
+  function changeCollapsed(value: boolean) {
+    setCollapsed(value);
+    setAccountOpen(false);
+    try { localStorage.setItem('serene-sidebar-collapsed', String(value)); } catch { /* Keep the session preference. */ }
+  }
+  function toggleGroup(label: string) {
+    if (collapsed) {
+      changeCollapsed(false);
+      setOpenGroups(previous => new Set(previous).add(label));
+      return;
+    }
+    setOpenGroups(previous => { const next = new Set(previous); next.has(label) ? next.delete(label) : next.add(label); return next; });
+  }
+  function navLink(item: NavItem, child = false) {
+    const active = pathname === item.href;
+    return <Link key={item.href} href={item.href} title={item.label} aria-label={item.label} aria-current={active ? 'page' : undefined} className={`spa-nav-link ${active ? 'is-active' : ''} ${child ? 'spa-child-link' : ''}`}>
+      <span className="spa-nav-icon" aria-hidden="true">{item.icon}</span><span className="spa-sidebar-label">{item.label}</span>
+      {active && <span className="spa-active-dot spa-sidebar-label" aria-hidden="true" />}
+    </Link>;
+  }
 
   return (
     <div className="h-screen flex overflow-hidden print-shell-root">
-      {navOpen && (
-        <div className="fixed inset-0 bg-ink/40 z-30 md:hidden" onClick={() => setNavOpen(false)} aria-hidden />
-      )}
-
-      <aside
-        className={`fixed md:static inset-y-0 left-0 z-40 h-screen w-64 md:w-60 shrink-0 bg-forest-700 text-sand-50 flex flex-col no-print transition-transform duration-200 ${
-          navOpen ? 'translate-x-0' : '-translate-x-full'
-        } md:translate-x-0`}
-      >
-        <div className="px-6 py-6 flex items-start justify-between shrink-0">
-          <div>
-            <p className="font-display italic text-2xl">Serene Spa</p>
-            <p className="text-forest-200 text-xs mt-1 capitalize">
-              {user?.role} workspace{user?.branch_name ? ` · ${user.branch_name}` : ''}
-            </p>
-          </div>
-          <button
-            onClick={() => setNavOpen(false)}
-            className="md:hidden text-forest-200 hover:text-white"
-            aria-label="Close menu"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
-            </svg>
-          </button>
+      {navOpen && <div className="fixed inset-0 bg-ink/50 backdrop-blur-sm z-40 md:hidden" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+      <aside aria-label="Workspace sidebar" className={`spa-sidebar no-print ${collapsed ? 'spa-sidebar-collapsed' : ''} ${navOpen ? 'spa-sidebar-open' : ''}`}>
+        <div className="spa-brand">
+          <span className="spa-brand-mark" aria-hidden="true">S</span>
+          <div className="spa-sidebar-label min-w-0"><p className="font-display italic text-2xl whitespace-nowrap">Serene Spa</p><p className="text-xs text-forest-200 capitalize truncate mt-1" title={user?.branch_name || undefined}>{user?.role} workspace{user?.branch_name ? ` · ${user.branch_name}` : ''}</p></div>
+          <button onClick={() => setNavOpen(false)} className="md:hidden ml-auto p-2" aria-label="Close menu">✕</button>
         </div>
-
-        <nav className="flex-1 px-3 space-y-1 overflow-y-auto min-h-0">
-          {navItems.map((item) => {
-            if (item.children) {
-              const isOpen = openGroups.has(item.label);
-              const groupHasActive = item.children.some((c) => c.href === pathname);
-              return (
-                <div key={item.label}>
-                  <button
-                    onClick={() => toggleGroup(item.label)}
-                    className="w-full relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm group hover:bg-forest-600/50 transition-colors"
-                  >
-                    <span
-                      className={`shrink-0 transition-transform duration-150 group-hover:scale-110 ${
-                        groupHasActive ? 'text-white opacity-100' : 'text-forest-100 opacity-90'
-                      }`}
-                    >
-                      {item.icon}
-                    </span>
-                    <span className={`flex-1 text-left ${groupHasActive ? 'text-white font-medium' : 'text-forest-100'}`}>
-                      {item.label}
-                    </span>
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      className={`text-forest-200 shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-90' : ''}`}
-                    >
-                      <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </button>
-                  {isOpen && (
-                    <div className="ml-4 pl-2.5 border-l border-forest-600/60 mt-0.5 space-y-1">
-                      {item.children.map((child) => {
-                        const active = pathname === child.href;
-                        return (
-                          <Link
-                            key={child.href}
-                            href={child.href}
-                            className="relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm group"
-                          >
-                            {active && (
-                              <motion.div
-                                layoutId="nav-active-pill"
-                                className="absolute inset-0 bg-forest-600 rounded-lg shadow-sm"
-                                transition={{ type: 'spring', stiffness: 500, damping: 34 }}
-                              />
-                            )}
-                            {!active && (
-                              <span className="absolute inset-0 rounded-lg bg-forest-600/0 group-hover:bg-forest-600/50 transition-colors duration-150" />
-                            )}
-                            <span
-                              className={`relative z-10 shrink-0 transition-transform duration-150 group-hover:scale-110 ${
-                                active ? 'text-white opacity-100' : 'text-forest-100 opacity-90'
-                              }`}
-                            >
-                              {child.icon}
-                            </span>
-                            <span className={`relative z-10 ${active ? 'text-white font-medium' : 'text-forest-100'}`}>
-                              {child.label}
-                            </span>
-                          </Link>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-
-            const active = pathname === item.href;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm group"
-              >
-                {active && (
-                  <motion.div
-                    layoutId="nav-active-pill"
-                    className="absolute inset-0 bg-forest-600 rounded-lg shadow-sm"
-                    transition={{ type: 'spring', stiffness: 500, damping: 34 }}
-                  />
-                )}
-                {!active && (
-                  <span className="absolute inset-0 rounded-lg bg-forest-600/0 group-hover:bg-forest-600/50 transition-colors duration-150" />
-                )}
-                <span
-                  className={`relative z-10 shrink-0 transition-transform duration-150 group-hover:scale-110 ${
-                    active ? 'text-white opacity-100' : 'text-forest-100 opacity-90'
-                  }`}
-                >
-                  {item.icon}
-                </span>
-                <span className={`relative z-10 ${active ? 'text-white font-medium' : 'text-forest-100'}`}>
-                  {item.label}
-                </span>
-              </Link>
-            );
-          })}
+        <button onClick={() => changeCollapsed(!collapsed)} className="spa-collapse" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}>
+          <Chevron reverse={collapsed} /><span className="spa-sidebar-label">Collapse sidebar</span>
+        </button>
+        <nav aria-label="Main navigation" className="spa-navigation">
+          <p className="spa-nav-heading spa-sidebar-label">WORKSPACE</p>
+          {navItems.map((item, index) => item.children ? <div key={item.label}>
+            <button className={`spa-nav-link w-full ${item.children.some(child => child.href === pathname) ? 'is-active-group' : ''}`} onClick={() => toggleGroup(item.label)} title={item.label} aria-label={item.label} aria-expanded={openGroups.has(item.label) && (!collapsed || navOpen)} aria-controls={`sidebar-group-${index}`}>
+              <span className="spa-nav-icon" aria-hidden="true">{item.icon}</span><span className="spa-sidebar-label flex-1 text-left">{item.label}</span><span className={`spa-sidebar-label transition-transform ${openGroups.has(item.label) ? '-rotate-90' : 'rotate-180'}`}><Chevron /></span>
+            </button>
+            <div id={`sidebar-group-${index}`} className="spa-nav-children" hidden={!openGroups.has(item.label)}>{item.children.map(child => navLink(child, true))}</div>
+          </div> : navLink(item))}
         </nav>
-
-        <div className="px-6 py-5 border-t border-forest-600/60 shrink-0">
-          <p className="text-sm text-sand-50">{user?.name}</p>
-          <p className="text-xs text-forest-200 truncate">{user?.email}</p>
-          <div className="flex flex-col gap-2 mt-4">
-            <button
-              onClick={() => setShowChangePassword(true)}
-              className="w-full rounded-lg bg-forest-500 text-sand-50 text-xs font-medium py-2 hover:bg-forest-400 active:scale-[0.97] transition-all"
-            >
-              Change password
-            </button>
-            <button
-              onClick={logout}
-              className="w-full rounded-lg bg-forest-600 text-sand-50 text-xs font-medium py-2 hover:bg-forest-500 active:scale-[0.97] transition-all"
-            >
-              Sign out
-            </button>
-          </div>
-          <PushToggle />
+        <div ref={accountRef} className="spa-account" onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) setAccountOpen(false); }}>
+          {accountOpen && <div id="sidebar-account" role="dialog" aria-label="My account" className="spa-account-panel">
+            <div className="flex items-center gap-3 pb-4 border-b border-white/10"><span className="spa-avatar shrink-0">{initials}</span><div className="min-w-0"><p className="font-semibold text-sm break-words">{user?.name}</p><p className="text-xs text-forest-200 break-all mt-1">{user?.email}</p><p className="text-xs text-honey-400 capitalize mt-1">{user?.role}{user?.branch_name ? ` · ${user.branch_name}` : ''}</p></div></div>
+            <button className="spa-account-action" onClick={() => { setAccountOpen(false); setShowChangePassword(true); }}>Change password <span aria-hidden="true">↗</span></button>
+            <div className="px-3 pb-4 border-b border-white/10"><p className="text-xs font-medium text-forest-100">Phone notifications</p><PushToggle /></div>
+            <button className="spa-account-action spa-signout" onClick={logout}>Sign out <span aria-hidden="true">→</span></button>
+          </div>}
+          <button ref={accountButton} className={`spa-account-trigger ${accountOpen ? 'is-open' : ''}`} onClick={() => setAccountOpen(!accountOpen)} aria-label="My account" title="My account" aria-expanded={accountOpen} aria-controls="sidebar-account" aria-haspopup="dialog">
+            <span className="spa-avatar shrink-0">{initials}</span><span className="spa-sidebar-label text-left flex-1"><span className="block text-sm font-medium">My account</span><span className="block text-xs text-forest-200 mt-0.5">Profile & preferences</span></span><span className={`spa-sidebar-label ${accountOpen ? '-rotate-90' : 'rotate-90'}`}><Chevron /></span>
+          </button>
         </div>
       </aside>
-
       <div className="flex-1 flex flex-col min-w-0 min-h-0 print-shell-col">
-        <header className="relative z-40 h-16 shrink-0 border-b border-forest-100 bg-sand-50/80 backdrop-blur flex items-center justify-between px-4 md:px-8 gap-3 no-print">
-          <button
-            onClick={() => setNavOpen(true)}
-            className="md:hidden rounded-lg h-10 w-10 flex items-center justify-center border border-forest-100 bg-white active:scale-95 transition-transform shrink-0"
-            aria-label="Open menu"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M4 7h16M4 12h16M4 17h16" strokeLinecap="round" />
-            </svg>
-          </button>
-          {user?.role === 'admin' && <GlobalSearch />}
-          <div className="flex-1" />
-          <NotificationBell />
+        <header className="relative z-30 h-16 shrink-0 border-b border-forest-100 bg-sand-50/80 backdrop-blur flex items-center justify-between px-4 md:px-8 gap-3 no-print">
+          <button onClick={() => setNavOpen(true)} className="md:hidden rounded-lg h-10 w-10 flex items-center justify-center border border-forest-100 bg-white shrink-0" aria-label="Open menu" aria-expanded={navOpen}><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M4 12h16M4 17h16" strokeLinecap="round" /></svg></button>
+          {user?.role === 'admin' && <GlobalSearch />}<div className="flex-1" /><NotificationBell />
         </header>
-        <main className="flex-1 min-h-0 p-4 sm:p-6 md:p-8 overflow-y-auto print-shell-main">
-          <motion.div
-            key={pathname}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-          >
-            {children}
-          </motion.div>
-        </main>
+        <main className="flex-1 min-h-0 p-4 sm:p-6 md:p-8 overflow-y-auto print-shell-main"><motion.div key={pathname} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15, ease: 'easeOut' }}>{children}</motion.div></main>
       </div>
-
       {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} />}
     </div>
   );
 }
+

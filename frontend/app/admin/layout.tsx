@@ -27,7 +27,7 @@ const NAV: NavItem[] = [
     label: 'Operations',
     icon: <CustomersIcon />,
     children: [
-      { href: '/admin/bookings', label: 'Customers and services', icon: <CustomersIcon /> },
+      { href: '/admin/bookings', label: 'Customer Visits', icon: <CustomersIcon /> },
       { href: '/admin/rooms', label: 'Rooms', icon: <RoomsIcon /> },
       { href: '/admin/notifications', label: 'Notifications', icon: <NotificationsIcon /> },
     ],
@@ -63,3 +63,4 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     </RoleGuard>
   );
 }
+
